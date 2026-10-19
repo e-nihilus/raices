@@ -22,10 +22,12 @@ function openPerson(id: string) {
 export default function Family() {
   const { data, demo } = useLibrary();
   const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const hasQuery = normalizedQuery.length > 0;
   const matches = data.people.filter((person) =>
     `${person.name} ${person.aliases.join(" ")}`
       .toLowerCase()
-      .includes(query.trim().toLowerCase()),
+      .includes(normalizedQuery),
   );
 
   return (
@@ -55,7 +57,7 @@ export default function Family() {
         onChangeText={setQuery}
         style={styles.input}
       />
-      {(!demo || query.trim()) &&
+      {(!demo || hasQuery) &&
         matches.map((person) => (
           <Pressable
             key={person.id}
@@ -93,7 +95,7 @@ export default function Family() {
             </Card>
           </Pressable>
         ))}
-      {query.trim() && !matches.length && (
+      {hasQuery && !matches.length && (
         <Copy style={{ color: colors.muted }}>
           No encontramos a nadie con ese nombre o parentesco.
         </Copy>
