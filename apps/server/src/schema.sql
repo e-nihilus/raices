@@ -1,0 +1,17 @@
+CREATE TABLE IF NOT EXISTS families (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS family_members (family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, user_id TEXT NOT NULL, PRIMARY KEY(family_id,user_id));
+CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, title TEXT NOT NULL, created_at TEXT NOT NULL, duration REAL NOT NULL DEFAULT 0, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', error TEXT, audio_path TEXT NOT NULL, mime_type TEXT NOT NULL, bookmarks TEXT NOT NULL DEFAULT '[]', extraction TEXT);
+CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, name TEXT NOT NULL, aliases TEXT NOT NULL DEFAULT '[]', candidate_ids TEXT NOT NULL DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS segments (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, start_time REAL NOT NULL, end_time REAL NOT NULL, text TEXT NOT NULL, speaker TEXT);
+CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, person_id TEXT REFERENCES people(id) ON DELETE SET NULL, segment_id TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE, quote TEXT NOT NULL, statement TEXT NOT NULL, certainty TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS relationships (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, person_a TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, person_b TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, type TEXT NOT NULL, claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, description TEXT NOT NULL, type TEXT NOT NULL, year INTEGER, place TEXT, certainty TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS event_people (event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, PRIMARY KEY(event_id,person_id));
+CREATE TABLE IF NOT EXISTS event_claims (event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE, claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, PRIMARY KEY(event_id,claim_id));
+CREATE TABLE IF NOT EXISTS processing_jobs (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL, lease_until TEXT, error TEXT);
+CREATE INDEX IF NOT EXISTS conversations_family ON conversations(family_id,created_at);
+CREATE INDEX IF NOT EXISTS people_family ON people(family_id);
+CREATE INDEX IF NOT EXISTS segments_conversation ON segments(conversation_id,start_time);
+CREATE INDEX IF NOT EXISTS claims_conversation ON claims(conversation_id);
+CREATE INDEX IF NOT EXISTS events_conversation ON events(conversation_id);
+CREATE INDEX IF NOT EXISTS jobs_pending ON processing_jobs(status,available_at);

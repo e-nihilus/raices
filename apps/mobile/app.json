@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Raíces",
+    "slug": "raices-memoria-familiar",
+    "scheme": "raices",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.raices.memoria"
+    },
+    "android": {
+      "package": "com.raices.memoria"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Raíces"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Raíces necesita el micrófono para conservar tus conversaciones familiares.",
+          "enableBackgroundRecording": true
+        }
+      ],
+      "expo-font",
+      "expo-sharing",
+      "expo-splash-screen",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

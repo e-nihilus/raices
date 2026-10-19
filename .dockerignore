@@ -1,0 +1,8 @@
+**/node_modules
+**/.env
+**/.env.*
+**/.data
+**/.expo
+**/dist
+.git
+stitch_ra_ces_memoria_familiar_app

@@ -1,0 +1,33 @@
+{
+  "name": "raices",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "npm run start -w @raices/mobile",
+    "web": "npm run web -w @raices/mobile",
+    "server": "npm run dev -w @raices/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint -w @raices/mobile",
+    "test": "npm run test -w @raices/server",
+    "build:web": "npm run build:web -w @raices/mobile",
+    "setup:local": "node scripts/setup-local.mjs",
+    "format": "prettier --write apps/mobile/src apps/server/src apps/server/test packages/shared/src docs README.md"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
+  },
+  "overrides": {
+    "react-native-reanimated": "4.5.1",
+    "react-native-worklets": "0.10.1"
+  },
+  "dependencies": {
+    "@supabase/server": "^1.9.1"
+  }
+}
