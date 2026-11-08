@@ -461,15 +461,55 @@ export function createApp(db: Sql) {
     await db.all("DELETE FROM conversations WHERE id=?", [c.id]);
     res.json({ ok: true });
   });
+  app.post("/conversations/:id/correct", async (req, res) => {
+    const input = z.object({
+      from: z.string().trim().min(1).max(200),
+      to: z.string().trim().min(1).max(200),
+      kind: z.enum(["transcription", "interpretation"]),
+    }).parse(req.body);
+    const family = res.locals.familyId;
+    const id = uuid.parse(req.params.id);
+    const [conversation] = await db.all("SELECT id, status FROM conversations WHERE id=? AND family_id=?", [id, family]);
+    if (!conversation) return res.sendStatus(404);
+    if (conversation.status !== "ready") return res.status(409).json({ error: "Espera a que termine el procesamiento" });
+    if (input.from === input.to) return res.status(400).json({ error: "Los textos son iguales" });
+    await db.transaction(async (tx) => {
+      const replace = async (table: string, column: string, scope: string, values: unknown[]) => {
+        await tx.all(`UPDATE ${table} SET ${column}=replace(${column}, ?, ?) WHERE ${scope}`, [input.from, input.to, ...values]);
+      };
+      if (input.kind === "transcription") {
+        // Explicitly requested spelling corrections apply to the whole family library.
+        await replace("people", "name", "family_id=?", [family]);
+        for (const column of ["title", "summary"]) await replace("conversations", column, "family_id=?", [family]);
+        for (const column of ["text"]) await replace("segments", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
+        for (const column of ["quote", "statement"]) await replace("claims", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
+        for (const column of ["description", "place"]) await replace("events", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
+        for (const column of ["title", "summary", "extracted_text"]) await replace("documents", column, "family_id=?", [family]);
+        for (const column of ["quote", "statement"]) await replace("document_claims", column, "document_id IN (SELECT id FROM documents WHERE family_id=?)", [family]);
+        for (const column of ["description", "place"]) await replace("document_events", column, "document_id IN (SELECT id FROM documents WHERE family_id=?)", [family]);
+      } else {
+        // Interpretation corrections leave the source transcript and quotations intact.
+        await replace("conversations", "summary", "id=? AND family_id=?", [id, family]);
+        await replace("claims", "statement", "conversation_id=?", [id]);
+        await replace("events", "description", "conversation_id=?", [id]);
+        await replace("relationships", "type", "family_id=? AND claim_id IN (SELECT id FROM claims WHERE conversation_id=?)", [family, id]);
+      }
+    });
+    res.json({ ok: true });
+  });
   app.patch("/claims/:id", async (req, res) => {
-    const certainty = certaintySchema.parse(req.body.certainty);
+    const input = z.object({
+      certainty: certaintySchema.optional(),
+      statement: z.string().trim().min(1).max(2000).optional(),
+    }).refine((value) => value.certainty !== undefined || value.statement !== undefined).parse(req.body);
     const [claim] = await db.all(
       "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
       [req.params.id, res.locals.familyId],
     );
     if (!claim) return res.sendStatus(404);
-    await db.all("UPDATE claims SET certainty=? WHERE id=?", [
-      certainty,
+    await db.all("UPDATE claims SET certainty=?, statement=? WHERE id=?", [
+      input.certainty ?? (input.statement !== undefined ? "pending" : claim.certainty),
+      input.statement ?? claim.statement,
       claim.id,
     ]);
     res.json({ ok: true });

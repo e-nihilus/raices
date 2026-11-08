@@ -24,7 +24,13 @@ export default function Memory() {
     [seek, setSeek] = useState<{ time: number; nonce: number }>(),
     [deleting, setDeleting] = useState(false),
     [editing, setEditing] = useState(false),
-    [title, setTitle] = useState("");
+    [title, setTitle] = useState(""),
+    [correcting, setCorrecting] = useState(false),
+    [correctionKind, setCorrectionKind] = useState<"transcription" | "interpretation">("transcription"),
+    [from, setFrom] = useState(""),
+    [to, setTo] = useState(""),
+    [editingClaim, setEditingClaim] = useState<string | null>(null),
+    [claimText, setClaimText] = useState("");
   if (!c)
     return (
       <Screen back>
@@ -177,9 +183,30 @@ export default function Memory() {
               <Copy kind="heading">Lo que nos contaron</Copy>
               {c.claims.map((cl) => (
                 <Card key={cl.id}>
-                  <Copy>{cl.statement}</Copy>
+                  {editingClaim === cl.id ? (
+                    <TextInput accessibilityLabel="Editar afirmación" style={styles.input} value={claimText} onChangeText={setClaimText} multiline maxLength={2000} />
+                  ) : <Copy>{cl.statement}</Copy>}
                   <Badge warm>{certaintyLabels[cl.certainty]}</Badge>
                   <Copy kind="small">“{cl.quote}”</Copy>
+                  {!c.demo && (editingClaim === cl.id ? (
+                    <>
+                      <Copy kind="small">La cita original se conserva. Esta edición modifica solo esta afirmación; para corregir otras menciones, usa «Corregir texto o dato».</Copy>
+                      <Button label="Guardar afirmación" disabled={!claimText.trim()} onPress={() => void lib.run(async () => {
+                        await request(`/claims/${cl.id}`, { method: "PATCH", body: JSON.stringify({ statement: claimText }) });
+                        await lib.refresh();
+                        setEditingClaim(null);
+                      })} />
+                      <Button secondary label="Cancelar" onPress={() => setEditingClaim(null)} />
+                    </>
+                  ) : (
+                    <>
+                      <Button secondary label="Editar afirmación" icon="edit-3" onPress={() => { setClaimText(cl.statement); setEditingClaim(cl.id); }} />
+                      <Button secondary label={cl.certainty === "confirmed" ? "Afirmación confirmada" : "Confirmar afirmación"} icon="check" disabled={cl.certainty === "confirmed"} onPress={() => void lib.run(async () => {
+                        await request(`/claims/${cl.id}`, { method: "PATCH", body: JSON.stringify({ certainty: "confirmed" }) });
+                        await lib.refresh();
+                      })} />
+                    </>
+                  ))}
                 </Card>
               ))}
             </>
@@ -230,6 +257,33 @@ export default function Memory() {
       )}
       {!c.demo && (
         <>
+          {c.status === "ready" && (
+            <>
+              <Button secondary label="Corregir texto o dato" icon="edit-3" onPress={() => setCorrecting(!correcting)} />
+              {correcting && (
+                <Card>
+                  <Copy kind="heading">Hacer una corrección</Copy>
+                  <View style={styles.row}>
+                    <Button secondary={correctionKind !== "transcription"} label="Transcripción" style={{ flex: 1 }} onPress={() => setCorrectionKind("transcription")} />
+                    <Button secondary={correctionKind !== "interpretation"} label="Dato extraído" style={{ flex: 1 }} onPress={() => setCorrectionKind("interpretation")} />
+                  </View>
+                  <Copy kind="small">
+                    {correctionKind === "transcription"
+                      ? "Corrige el mismo texto en toda la biblioteca, incluidos nombres y citas. Se respetan mayúsculas y minúsculas."
+                      : "Corrige el texto extraído y los vínculos de este recuerdo. La transcripción y las citas originales se conservan. Se respetan mayúsculas y minúsculas."}
+                  </Copy>
+                  <TextInput accessibilityLabel="Texto incorrecto" placeholder="Texto incorrecto" style={styles.input} value={from} onChangeText={setFrom} maxLength={200} />
+                  <TextInput accessibilityLabel="Texto corregido" placeholder="Texto corregido" style={styles.input} value={to} onChangeText={setTo} maxLength={200} />
+                  <Copy kind="small">Se sustituirán todas las coincidencias exactas en el ámbito indicado. Usa un texto específico para evitar cambios no deseados.</Copy>
+                  <Button label="Guardar corrección" disabled={!from.trim() || !to.trim() || from.trim() === to.trim()} onPress={() => void lib.run(async () => {
+                    await request(`/conversations/${c.id}/correct`, { method: "POST", body: JSON.stringify({ from, to, kind: correctionKind }) });
+                    await lib.refresh();
+                    setFrom(""); setTo(""); setCorrecting(false);
+                  })} />
+                </Card>
+              )}
+            </>
+          )}
           <Button
             secondary
             label="Cambiar título"
