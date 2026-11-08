@@ -12,6 +12,7 @@ import {
 } from "../components/ui";
 import { useLibrary } from "../state/LibraryProvider";
 import { apiUrl, login, logout, register, usernameAvailable } from "../lib/api";
+import { AccountProfile } from "../components/AccountLinks";
 import { demoUser } from "../lib/demo";
 export default function Settings() {
   const lib = useLibrary();
@@ -114,6 +115,7 @@ export default function Settings() {
           />
         )}
       </Card>
+      {Boolean(apiUrl && lib.user) && <AccountProfile />}
       {(!apiUrl || lib.user) && (
         <>
           {lib.demo && (

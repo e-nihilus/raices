@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
+  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -7,6 +10,7 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import type { Person, Relationship } from "@raices/shared";
 import { demoFamilyParents, demoFamilyPartners } from "../lib/demo";
 import { Badge, Copy, Icon, colors, styles } from "./ui";
@@ -84,43 +88,109 @@ function bounded(
   return { x, y, scale };
 }
 
-function realMapLayout(people: Person[], relationships: Relationship[]) {
+type FamilyGraph = {
+  parentsByChild: Map<string, Set<string>>;
+  partners: [string, string][];
+};
+
+function familyGraph(
+  people: Person[],
+  relationships: Relationship[],
+): FamilyGraph {
   const ids = new Set(people.map((person) => person.id));
-  const parentEdges: [string, string][] = [];
+  const parentsByChild = new Map<string, Set<string>>();
+  const partners = new Map<string, [string, string]>();
   for (const relation of relationships) {
-    if (!ids.has(relation.fromId) || !ids.has(relation.toId)) continue;
-    const kind = relation.type.trim().toLowerCase();
-    if (/^(padre|madre|progenitor|abuelo|abuela)/.test(kind)) {
-      parentEdges.push([relation.fromId, relation.toId]);
-    } else if (/^(hijo|hija|nieto|nieta)/.test(kind)) {
-      parentEdges.push([relation.toId, relation.fromId]);
+    if (
+      !ids.has(relation.fromId) ||
+      !ids.has(relation.toId) ||
+      relation.fromId === relation.toId
+    )
+      continue;
+    const kind = relation.type
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/^(es |su )/, "");
+    let parent: string | undefined;
+    let child: string | undefined;
+    if (/^(padre|madre|progenitor(?:a)?)(?:\b|$)/.test(kind)) {
+      [parent, child] = [relation.fromId, relation.toId];
+    } else if (/^(hijo|hija)(?:\b|$)/.test(kind)) {
+      [parent, child] = [relation.toId, relation.fromId];
+    } else if (
+      /^(pareja|conyuge|espos[oa]|marido|mujer|casad[oa])(?:\b|$)/.test(kind)
+    ) {
+      const pair = [relation.fromId, relation.toId].sort() as [string, string];
+      partners.set(pair.join("|"), pair);
+    }
+    if (parent && child) {
+      const parents = parentsByChild.get(child) || new Set<string>();
+      parents.add(parent);
+      parentsByChild.set(child, parents);
     }
   }
+  return { parentsByChild, partners: [...partners.values()] };
+}
+
+function realMapLayout(people: Person[], graph: FamilyGraph) {
   const level = new Map(people.map((person) => [person.id, 0]));
+  // Keep known co-parents and partners together on the same generation.
+  const pairs = [...graph.partners];
+  for (const parents of graph.parentsByChild.values()) {
+    const ids = [...parents];
+    if (ids.length === 2) pairs.push([ids[0], ids[1]]);
+  }
   for (let pass = 0; pass < people.length; pass++) {
     let changed = false;
-    for (const [parent, child] of parentEdges) {
-      const next = Math.min(7, (level.get(parent) || 0) + 1);
-      if (next > (level.get(child) || 0)) {
-        level.set(child, next);
-        changed = true;
+    for (const [a, b] of pairs) {
+      const rank = Math.max(level.get(a) || 0, level.get(b) || 0);
+      if (level.get(a) !== rank || level.get(b) !== rank) changed = true;
+      level.set(a, rank);
+      level.set(b, rank);
+    }
+    for (const [child, parents] of graph.parentsByChild) {
+      for (const parent of parents) {
+        const next = Math.min(people.length, (level.get(parent) || 0) + 1);
+        if (next > (level.get(child) || 0)) {
+          level.set(child, next);
+          changed = true;
+        }
       }
     }
     if (!changed) break;
   }
   const rows = new Map<number, Person[]>();
-  for (const [index, person] of people.entries()) {
-    const rank = parentEdges.length
-      ? level.get(person.id) || 0
-      : Math.floor(index / 6);
+  for (const person of people) {
+    const rank = level.get(person.id) || 0;
     rows.set(rank, [...(rows.get(rank) || []), person]);
+  }
+  // Place each known couple next to one another, and siblings with the same
+  // recorded parents together. Do not infer relationships from names.
+  for (const row of rows.values()) {
+    row.sort((a, b) => {
+      const group = (id: string) =>
+        [...(graph.parentsByChild.get(id) || [])].sort().join("|");
+      return (
+        group(a.id).localeCompare(group(b.id)) ||
+        a.name.localeCompare(b.name, "es")
+      );
+    });
+    for (const [a, b] of pairs) {
+      const first = row.findIndex((person) => person.id === a);
+      const second = row.findIndex((person) => person.id === b);
+      if (first >= 0 && second >= 0 && Math.abs(first - second) > 1) {
+        const [partner] = row.splice(second, 1);
+        row.splice(row.findIndex((person) => person.id === a) + 1, 0, partner);
+      }
+    }
   }
   const widest = Math.max(1, ...[...rows.values()].map((row) => row.length));
   const width = Math.max(720, widest * 190 + 120);
   const height = Math.max(430, (Math.max(0, ...rows.keys()) + 1) * 240 + 110);
   const positions: Record<string, Point> = {};
   for (const [rank, row] of rows) {
-    row.sort((a, b) => a.name.localeCompare(b.name, "es"));
     const spacing = width / (row.length + 1);
     row.forEach((person, index) => {
       positions[person.id] = { x: spacing * (index + 1), y: 100 + rank * 240 };
@@ -159,23 +229,98 @@ function touchInfo(event: GestureResponderEvent) {
 
 type TouchInfo = NonNullable<ReturnType<typeof touchInfo>>;
 
-export function FamilyTreeMap({
-  people,
-  relationships,
-  demo = false,
-  onOpenPerson,
-}: {
+type FamilyTreeMapProps = {
   people: Person[];
   relationships?: Relationship[];
   demo?: boolean;
   onOpenPerson: (id: string) => void;
-}) {
+};
+
+export function FamilyTreeMap(props: FamilyTreeMapProps) {
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fade] = useState(() => new Animated.Value(0));
+  const open = () => {
+    fade.setValue(0);
+    setFullscreen(true);
+    Animated.timing(fade, {
+      toValue: 1,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== "web",
+    }).start();
+  };
+  const close = useCallback(
+    (afterClose?: () => void) => {
+      Animated.timing(fade, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: Platform.OS !== "web",
+      }).start(({ finished }) => {
+        if (finished) {
+          setFullscreen(false);
+          afterClose?.();
+        }
+      });
+    },
+    [fade],
+  );
+  useEffect(() => {
+    if (!fullscreen || Platform.OS !== "web") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen, close]);
+  return (
+    <>
+      <FamilyTreeCanvas {...props} onFullscreen={open} />
+      <Modal
+        visible={fullscreen}
+        transparent
+        animationType="none"
+        onRequestClose={() => close()}
+      >
+        <Animated.View
+          style={{ flex: 1, opacity: fade, backgroundColor: "#f3f7f1" }}
+        >
+          <SafeAreaView style={{ flex: 1 }}>
+            <View
+              style={{ flex: 1, paddingHorizontal: 16, paddingVertical: 12 }}
+            >
+              <FamilyTreeCanvas
+                {...props}
+                fullscreen
+                onFullscreen={() => close()}
+                onOpenPerson={(id) => close(() => props.onOpenPerson(id))}
+              />
+            </View>
+          </SafeAreaView>
+        </Animated.View>
+      </Modal>
+    </>
+  );
+}
+
+function FamilyTreeCanvas({
+  people,
+  relationships,
+  demo = false,
+  onOpenPerson,
+  fullscreen = false,
+  onFullscreen,
+}: FamilyTreeMapProps & { fullscreen?: boolean; onFullscreen: () => void }) {
+  const graph = useMemo(
+    () => familyGraph(people, relationships || []),
+    [people, relationships],
+  );
   const layout = useMemo(
     () =>
       demo
         ? { positions: demoPositions, width: MAP_WIDTH, height: MAP_HEIGHT }
-        : realMapLayout(people, relationships || []),
-    [demo, people, relationships],
+        : realMapLayout(people, graph),
+    [demo, people, graph],
   );
   const { positions, width: mapWidth, height: mapHeight } = layout;
   const [view, setView] = useState<MapView>({ x: 0, y: 0, scale: 1 });
@@ -420,19 +565,46 @@ export function FamilyTreeMap({
   }, [apply, zoom, mapWidth, mapHeight]);
 
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 10, ...(fullscreen ? { flex: 1 } : {}) }}>
       <View style={[styles.row, { justifyContent: "space-between" }]}>
         <Badge warm={demo}>
           {demo ? "MAPA FAMILIAR · EJEMPLO" : "MAPA FAMILIAR"}
         </Badge>
-        <Copy kind="small">{people.length} personas</Copy>
+        <View style={[styles.row, { gap: 10 }]}>
+          <Copy kind="small">{people.length} personas</Copy>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              fullscreen
+                ? "Cerrar pantalla completa"
+                : "Abrir árbol en pantalla completa"
+            }
+            onPress={onFullscreen}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+              padding: 8,
+              borderRadius: 10,
+              backgroundColor: colors.white,
+              borderWidth: 1,
+              borderColor: colors.line,
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Icon name={fullscreen ? "x" : "maximize"} size={18} />
+            <Copy kind="small">
+              {fullscreen ? "Cerrar" : "Pantalla completa"}
+            </Copy>
+          </Pressable>
+        </View>
       </View>
       <View
         ref={containerRef}
         onLayout={onLayout}
         {...(Platform.OS === "web" ? {} : panResponder.panHandlers)}
         style={{
-          height: 540,
+          ...(fullscreen ? { flex: 1 } : { height: 540 }),
           overflow: "hidden",
           borderRadius: 24,
           borderWidth: 1,
@@ -487,9 +659,7 @@ export function FamilyTreeMap({
                   />
                 </View>
               ))}
-            {demo
-              ? demoFamilyLines()
-              : realFamilyLines(relationships || [], positions)}
+            {demo ? demoFamilyLines() : realFamilyLines(graph, positions)}
           </View>
           {people.map((person) => {
             const point = positions[person.id];
@@ -712,59 +882,71 @@ function demoFamilyLines() {
   });
 }
 
-function realFamilyLines(
-  relationships: Relationship[],
-  positions: Record<string, Point>,
-) {
-  return relationships.flatMap((relation) => {
-    const first = positions[relation.fromId];
-    const second = positions[relation.toId];
-    if (!first || !second) return [];
-    const sameRow = first.y === second.y;
-    const upper = first.y < second.y ? first : second;
-    const lower = first.y < second.y ? second : first;
-    const segments = sameRow
-      ? [
-          {
-            x1: Math.min(first.x, second.x) + NODE_WIDTH / 2,
-            y1: first.y + NODE_HEIGHT / 2,
-            x2: Math.max(first.x, second.x) - NODE_WIDTH / 2,
-            y2: first.y + NODE_HEIGHT / 2,
-          },
-        ]
-      : [
-          {
-            x1: upper.x,
-            y1: upper.y + NODE_HEIGHT,
-            x2: upper.x,
-            y2: (upper.y + NODE_HEIGHT + lower.y) / 2,
-          },
-          {
-            x1: Math.min(upper.x, lower.x),
-            y1: (upper.y + NODE_HEIGHT + lower.y) / 2,
-            x2: Math.max(upper.x, lower.x),
-            y2: (upper.y + NODE_HEIGHT + lower.y) / 2,
-          },
-          {
-            x1: lower.x,
-            y1: (upper.y + NODE_HEIGHT + lower.y) / 2,
-            x2: lower.x,
-            y2: lower.y,
-          },
-        ];
-    return segments.map((segment, index) => (
-      <View
-        key={`${relation.id}-${index}`}
-        style={{
-          position: "absolute",
-          left: Math.min(segment.x1, segment.x2),
-          top: Math.min(segment.y1, segment.y2),
-          width: Math.max(2, Math.abs(segment.x2 - segment.x1)),
-          height: Math.max(2, Math.abs(segment.y2 - segment.y1)),
-          backgroundColor: "#647f69",
-          borderRadius: 2,
-        }}
-      />
-    ));
-  });
+function realFamilyLines(graph: FamilyGraph, positions: Record<string, Point>) {
+  type Segment = { x1: number; y1: number; x2: number; y2: number };
+  const segments: Segment[] = [];
+  const couples = new Set<string>();
+  const addCouple = (a: string, b: string) => {
+    const key = [a, b].sort().join("|");
+    const first = positions[a];
+    const second = positions[b];
+    if (couples.has(key) || !first || !second || first.y !== second.y) return;
+    couples.add(key);
+    segments.push({
+      x1: Math.min(first.x, second.x) + NODE_WIDTH / 2,
+      y1: first.y + NODE_HEIGHT / 2,
+      x2: Math.max(first.x, second.x) - NODE_WIDTH / 2,
+      y2: first.y + NODE_HEIGHT / 2,
+    });
+  };
+  graph.partners.forEach(([a, b]) => addCouple(a, b));
+  const families = new Map<string, { parents: string[]; children: string[] }>();
+  for (const [child, parentIds] of graph.parentsByChild) {
+    const parents = [...parentIds].sort();
+    const key = parents.join("|");
+    const family = families.get(key) || { parents, children: [] };
+    family.children.push(child);
+    families.set(key, family);
+  }
+  for (const { parents, children } of families.values()) {
+    const parentPoints = parents.map((id) => positions[id]).filter(Boolean);
+    const childPoints = children.map((id) => positions[id]).filter(Boolean);
+    if (!parentPoints.length || !childPoints.length) continue;
+    if (parents.length === 2) addCouple(parents[0], parents[1]);
+    const x =
+      parentPoints.reduce((sum, point) => sum + point.x, 0) /
+      parentPoints.length;
+    const startY =
+      parents.length === 2 && parentPoints[0].y === parentPoints[1].y
+        ? parentPoints[0].y + NODE_HEIGHT / 2
+        : Math.max(...parentPoints.map((point) => point.y)) + NODE_HEIGHT;
+    const barY =
+      (Math.max(...parentPoints.map((point) => point.y + NODE_HEIGHT)) +
+        Math.min(...childPoints.map((point) => point.y))) /
+      2;
+    segments.push({ x1: x, y1: startY, x2: x, y2: barY });
+    segments.push({
+      x1: Math.min(x, ...childPoints.map((point) => point.x)),
+      y1: barY,
+      x2: Math.max(x, ...childPoints.map((point) => point.x)),
+      y2: barY,
+    });
+    childPoints.forEach((point) =>
+      segments.push({ x1: point.x, y1: barY, x2: point.x, y2: point.y }),
+    );
+  }
+  return segments.map((segment, index) => (
+    <View
+      key={index}
+      style={{
+        position: "absolute",
+        left: Math.min(segment.x1, segment.x2),
+        top: Math.min(segment.y1, segment.y2),
+        width: Math.max(2, Math.abs(segment.x2 - segment.x1)),
+        height: Math.max(2, Math.abs(segment.y2 - segment.y1)),
+        backgroundColor: "#647f69",
+        borderRadius: 2,
+      }}
+    />
+  ));
 }

@@ -356,6 +356,7 @@ export async function mergePeople(
     const source = rows.find((x) => x.id === sourceId),
       target = rows.find((x) => x.id === targetId);
     if (!source || !target) throw new Error("Persona inexistente");
+    await tx.all("UPDATE person_source_searches SET person_id=? WHERE person_id=? AND family_id=?", [targetId, sourceId, familyId]);
     await tx.all("UPDATE claims SET person_id=? WHERE person_id=?", [
       targetId,
       sourceId,

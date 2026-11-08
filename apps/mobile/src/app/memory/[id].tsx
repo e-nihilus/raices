@@ -16,6 +16,23 @@ import { AudioPlayer } from "../../components/AudioPlayer";
 import { useLibrary } from "../../state/LibraryProvider";
 import { request } from "../../lib/api";
 import { shareAudio } from "../../lib/audio-files";
+function ClaimAction({ label, icon, onPress, disabled = false }: {
+  label: string;
+  icon: "edit-3" | "check";
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => ({
+      minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 22,
+      backgroundColor: colors.soft, flexDirection: "row", alignItems: "center", gap: 6,
+      opacity: disabled ? 0.55 : pressed ? 0.7 : 1,
+    })}>
+      <Icon name={icon} size={16} color={colors.primary} />
+      <Copy kind="small" style={{ color: colors.primary, fontSize: 13 }}>{label}</Copy>
+    </Pressable>
+  );
+}
 export default function Memory() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const lib = useLibrary();
@@ -30,7 +47,10 @@ export default function Memory() {
     [from, setFrom] = useState(""),
     [to, setTo] = useState(""),
     [editingClaim, setEditingClaim] = useState<string | null>(null),
-    [claimText, setClaimText] = useState("");
+    [claimText, setClaimText] = useState(""),
+    [editingQuote, setEditingQuote] = useState<string | null>(null),
+    [wordFrom, setWordFrom] = useState(""),
+    [wordTo, setWordTo] = useState("");
   if (!c)
     return (
       <Screen back>
@@ -184,28 +204,42 @@ export default function Memory() {
               {c.claims.map((cl) => (
                 <Card key={cl.id}>
                   {editingClaim === cl.id ? (
-                    <TextInput accessibilityLabel="Editar afirmación" style={styles.input} value={claimText} onChangeText={setClaimText} multiline maxLength={2000} />
+                    <TextInput accessibilityLabel="Editar interpretación" style={styles.input} value={claimText} onChangeText={setClaimText} multiline maxLength={2000} />
                   ) : <Copy>{cl.statement}</Copy>}
                   <Badge warm>{certaintyLabels[cl.certainty]}</Badge>
-                  <Copy kind="small">“{cl.quote}”</Copy>
+                  <Copy kind="small">Cita de la transcripción: “{cl.quote}”</Copy>
                   {!c.demo && (editingClaim === cl.id ? (
                     <>
-                      <Copy kind="small">La cita original se conserva. Esta edición modifica solo esta afirmación; para corregir otras menciones, usa «Corregir texto o dato».</Copy>
-                      <Button label="Guardar afirmación" disabled={!claimText.trim()} onPress={() => void lib.run(async () => {
+                      <Copy kind="small">Se modifica esta interpretación; la transcripción y la cita se conservan.</Copy>
+                      <Button label="Guardar interpretación" disabled={!claimText.trim()} onPress={() => void lib.run(async () => {
                         await request(`/claims/${cl.id}`, { method: "PATCH", body: JSON.stringify({ statement: claimText }) });
                         await lib.refresh();
                         setEditingClaim(null);
                       })} />
                       <Button secondary label="Cancelar" onPress={() => setEditingClaim(null)} />
                     </>
-                  ) : (
+                  ) : editingQuote === cl.id ? (
                     <>
-                      <Button secondary label="Editar afirmación" icon="edit-3" onPress={() => { setClaimText(cl.statement); setEditingClaim(cl.id); }} />
-                      <Button secondary label={cl.certainty === "confirmed" ? "Afirmación confirmada" : "Confirmar afirmación"} icon="check" disabled={cl.certainty === "confirmed"} onPress={() => void lib.run(async () => {
+                      <Copy kind="small">Indica qué texto de la cita está mal transcrito y su corrección. Se sustituirán todas las coincidencias exactas en la biblioteca, incluidos nombres y transcripciones. El audio original no cambia.</Copy>
+                      <TextInput accessibilityLabel="Texto incorrecto de la cita" placeholder="Texto incorrecto, por ejemplo Rallo" style={styles.input} value={wordFrom} onChangeText={setWordFrom} maxLength={200} />
+                      <TextInput accessibilityLabel="Texto correcto de la cita" placeholder="Texto correcto, por ejemplo Rayo" style={styles.input} value={wordTo} onChangeText={setWordTo} maxLength={200} />
+                      {!!wordFrom.trim() && !cl.quote.includes(wordFrom.trim()) && <Copy kind="small">El texto incorrecto debe aparecer exactamente en esta cita, respetando mayúsculas y minúsculas.</Copy>}
+                      <Button label="Corregir cita y otras menciones" disabled={!wordFrom.trim() || !wordTo.trim() || wordFrom.trim() === wordTo.trim() || !cl.quote.includes(wordFrom.trim())} onPress={() => void lib.run(async () => {
+                        await request(`/conversations/${c.id}/correct`, { method: "POST", body: JSON.stringify({ from: wordFrom, to: wordTo, kind: "transcription" }) });
+                        await lib.refresh();
+                        setEditingQuote(null);
+                      })} />
+                      <Button secondary label="Cancelar" onPress={() => setEditingQuote(null)} />
+                    </>
+                  ) : (
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      <ClaimAction label="Corregir cita" icon="edit-3" onPress={() => { setWordFrom(""); setWordTo(""); setEditingQuote(cl.id); }} />
+                      <ClaimAction label="Editar dato" icon="edit-3" onPress={() => { setClaimText(cl.statement); setEditingClaim(cl.id); }} />
+                      <ClaimAction label={cl.certainty === "confirmed" ? "Confirmado" : "Confirmar"} icon="check" disabled={cl.certainty === "confirmed"} onPress={() => void lib.run(async () => {
                         await request(`/claims/${cl.id}`, { method: "PATCH", body: JSON.stringify({ certainty: "confirmed" }) });
                         await lib.refresh();
                       })} />
-                    </>
+                    </View>
                   ))}
                 </Card>
               ))}

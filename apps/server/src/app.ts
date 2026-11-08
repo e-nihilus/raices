@@ -11,9 +11,10 @@ import { z } from "zod";
 import { randomUUID, timingSafeEqual, createHmac } from "node:crypto";
 import { certaintySchema } from "@raices/shared";
 import { type Sql } from "./db.ts";
+import { sharedTree } from "./shared-tree.ts";
 import { ensureFamily, library, mergePeople, json } from "./store.ts";
 import { cloud, saveAudio, deleteAudio, readAudio } from "./audio.ts";
-import { aiConfigured } from "./ai.ts";
+import { aiConfigured, reviewClaim, searchSources, transcribe } from "./ai.ts";
 import {
   deleteDocumentFile,
   readDocumentFile,
@@ -195,6 +196,199 @@ export function createApp(db: Sql) {
       db,
       req.headers.authorization?.replace(/^Bearer /, "") || "",
     );
+    res.json({ ok: true });
+  });
+  // Profiles and invitations use app accounts only; no library is shared by a request.
+  app.get("/profile", async (_req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const [p] = await db.all("SELECT * FROM account_profiles WHERE user_id=?", [
+      res.locals.userId,
+    ]);
+    res.json({
+      profile: p
+        ? {
+            firstName: p.first_name,
+            surname1: p.surname1,
+            surname2: p.surname2,
+            discoverable: Boolean(p.discoverable),
+          }
+        : null,
+    });
+  });
+  app.put("/profile", async (req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const name = z.string().trim().min(1).max(80);
+    const p = z
+      .object({
+        firstName: name,
+        surname1: name,
+        surname2: name,
+        discoverable: z.boolean(),
+      })
+      .parse(req.body);
+    await db.all(
+      "INSERT INTO account_profiles(user_id,first_name,surname1,surname2,discoverable) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name,surname1=excluded.surname1,surname2=excluded.surname2,discoverable=excluded.discoverable",
+      [
+        res.locals.userId,
+        p.firstName,
+        p.surname1,
+        p.surname2,
+        p.discoverable ? 1 : 0,
+      ],
+    );
+    res.json({ profile: p });
+  });
+  app.get(
+    "/account-search",
+    rateLimit({ windowMs: 60_000, limit: 20 }),
+    async (req, res) => {
+      if (!res.locals.account) return res.sendStatus(403);
+      const [own] = await db.all(
+        "SELECT user_id FROM account_profiles WHERE user_id=?",
+        [res.locals.userId],
+      );
+      if (!own)
+        return res
+          .status(403)
+          .json({ error: "Completa tu perfil antes de buscar familiares" });
+      const query = z
+        .string()
+        .trim()
+        .min(3)
+        .max(120)
+        .parse(req.query.q)
+        .toLocaleLowerCase("es");
+      // Match complete names or exact usernames. A name is never an identity match.
+      const rows = await db.all(
+        "SELECT u.id,u.username,p.first_name,p.surname1,p.surname2 FROM app_users u JOIN account_profiles p ON p.user_id=u.id WHERE p.discoverable=1 AND u.id<>?",
+        [res.locals.userId],
+      );
+      const matches = rows
+        .filter(
+          (r) =>
+            r.username.toLocaleLowerCase("es") === query ||
+            `${r.first_name} ${r.surname1} ${r.surname2}`.toLocaleLowerCase(
+              "es",
+            ) === query,
+        )
+        .slice(0, 20)
+        .map((r) => ({
+          id: r.id,
+          username: r.username,
+          name: `${r.first_name} ${r.surname1} ${r.surname2}`,
+        }));
+      res.json({ matches });
+    },
+  );
+  app.get("/family-links", async (_req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const rows = await db.all(
+      "SELECT r.*,s.username AS sender_username,t.username AS recipient_username,p.name AS person_name FROM family_link_requests r JOIN app_users s ON s.id=r.sender_id JOIN app_users t ON t.id=r.recipient_id JOIN people p ON p.id=r.person_id WHERE r.sender_id=? OR r.recipient_id=? ORDER BY r.created_at DESC",
+      [res.locals.userId, res.locals.userId],
+    );
+    res.json({
+      requests: rows.map((r) => ({
+        id: r.id,
+        senderId: r.sender_id,
+        senderUsername: r.sender_username,
+        recipientUsername: r.recipient_username,
+        personName: r.person_name,
+        relationship: r.relationship,
+        status: r.status,
+        incoming: r.recipient_id === res.locals.userId,
+      })),
+    });
+  });
+  app.post("/family-links", async (req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const input = z
+      .object({
+        recipientId: uuid,
+        personId: uuid,
+        relationship: z.string().trim().min(1).max(80),
+      })
+      .parse(req.body);
+    if (input.recipientId === res.locals.userId) return res.sendStatus(400);
+    const [profile] = await db.all(
+      "SELECT user_id FROM account_profiles WHERE user_id=?",
+      [res.locals.userId],
+    );
+    const [target] = await db.all(
+      "SELECT user_id FROM account_profiles WHERE user_id=? AND discoverable=1",
+      [input.recipientId],
+    );
+    const [person] = await db.all(
+      "SELECT id FROM people WHERE id=? AND family_id=?",
+      [input.personId, res.locals.familyId],
+    );
+    if (!profile || !target || !person)
+      return res
+        .status(404)
+        .json({ error: "No se encuentra el perfil o la persona seleccionada" });
+    const [existing] = await db.all(
+      "SELECT id FROM family_link_requests WHERE sender_id=? AND recipient_id=? AND status IN ('pending','accepted')",
+      [res.locals.userId, input.recipientId],
+    );
+    if (existing)
+      return res.status(409).json({
+        error: "Ya existe una solicitud o vinculación con esa cuenta",
+      });
+    await db.all(
+      "INSERT INTO family_link_requests(id,sender_id,recipient_id,person_id,relationship,status,created_at) VALUES(?,?,?,?,?,'pending',?)",
+      [
+        randomUUID(),
+        res.locals.userId,
+        input.recipientId,
+        input.personId,
+        input.relationship,
+        new Date().toISOString(),
+      ],
+    );
+    res.status(201).json({ ok: true });
+  });
+  app.post("/family-links/:id/respond", async (req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const { decision } = z
+      .object({ decision: z.enum(["accepted", "rejected"]) })
+      .parse(req.body);
+    const changed = await db.all(
+      "UPDATE family_link_requests SET status=? WHERE id=? AND recipient_id=? AND status='pending' RETURNING id",
+      [decision, uuid.parse(req.params.id), res.locals.userId],
+    );
+    if (!changed.length) return res.sendStatus(404);
+    res.json({ ok: true });
+  });
+  app.get("/shared-tree", async (_req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    res.json(await sharedTree(db, res.locals.userId));
+  });
+  app.get("/shared-tree/mine", async (_req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const rows = await db.all(
+      "SELECT person_id FROM shared_tree_people WHERE user_id=?",
+      [res.locals.userId],
+    );
+    res.json({ personIds: rows.map((row) => row.person_id) });
+  });
+  app.put("/shared-tree/people/:id", async (req, res) => {
+    if (!res.locals.account) return res.sendStatus(403);
+    const personId = uuid.parse(req.params.id);
+    const { shared } = z.object({ shared: z.boolean() }).parse(req.body);
+    const [person] = await db.all(
+      "SELECT id FROM people WHERE id=? AND family_id=?",
+      [personId, res.locals.familyId],
+    );
+    if (!person) return res.sendStatus(404);
+    if (shared)
+      await db.all(
+        "INSERT INTO shared_tree_people(user_id,person_id) VALUES(?,?) ON CONFLICT(user_id,person_id) DO NOTHING",
+        [res.locals.userId, personId],
+      );
+    else
+      await db.all(
+        "DELETE FROM shared_tree_people WHERE user_id=? AND person_id=?",
+        [res.locals.userId, personId],
+      );
     res.json({ ok: true });
   });
   app.get("/library", async (_req, res) =>
@@ -461,54 +655,286 @@ export function createApp(db: Sql) {
     await db.all("DELETE FROM conversations WHERE id=?", [c.id]);
     res.json({ ok: true });
   });
+  app.get("/people/:id/sources", async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const family = res.locals.familyId;
+    const [person] = await db.all(
+      "SELECT id FROM people WHERE id=? AND family_id=?",
+      [id, family],
+    );
+    if (!person) return res.sendStatus(404);
+    const rows = await db.all(
+      "SELECT id,query,result,created_at FROM person_source_searches WHERE person_id=? AND family_id=? ORDER BY created_at DESC LIMIT 20",
+      [id, family],
+    );
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        query: row.query,
+        createdAt: row.created_at,
+        ...JSON.parse(row.result),
+      })),
+    );
+  });
+  app.post(
+    "/people/:id/sources",
+    rateLimit({
+      windowMs: 60 * 60_000,
+      limit: 10,
+      keyGenerator: (_req, res) => res.locals.familyId,
+      message: {
+        error:
+          "Has alcanzado el límite de búsquedas por hora. Vuelve a intentarlo más tarde.",
+      },
+    }),
+    async (req, res) => {
+      const id = uuid.parse(req.params.id);
+      const family = res.locals.familyId;
+      const { query } = z
+        .object({ query: z.string().trim().min(5).max(500) })
+        .parse(req.body);
+      const [person] = await db.all(
+        "SELECT id FROM people WHERE id=? AND family_id=?",
+        [id, family],
+      );
+      if (!person) return res.sendStatus(404);
+      if (!process.env.OPENAI_API_KEY)
+        return res
+          .status(503)
+          .json({ error: "La búsqueda de fuentes no está configurada" });
+      const result = await searchSources(query);
+      const search = {
+        id: randomUUID(),
+        query,
+        createdAt: new Date().toISOString(),
+        ...result,
+      };
+      await db.all(
+        "INSERT INTO person_source_searches(id,family_id,person_id,query,result,created_at) VALUES(?,?,?,?,?,?)",
+        [
+          search.id,
+          family,
+          id,
+          query,
+          JSON.stringify(result),
+          search.createdAt,
+        ],
+      );
+      res.status(201).json(search);
+    },
+  );
   app.post("/conversations/:id/correct", async (req, res) => {
-    const input = z.object({
-      from: z.string().trim().min(1).max(200),
-      to: z.string().trim().min(1).max(200),
-      kind: z.enum(["transcription", "interpretation"]),
-    }).parse(req.body);
+    const input = z
+      .object({
+        from: z.string().trim().min(1).max(200),
+        to: z.string().trim().min(1).max(200),
+        kind: z.enum(["transcription", "interpretation"]),
+      })
+      .parse(req.body);
     const family = res.locals.familyId;
     const id = uuid.parse(req.params.id);
-    const [conversation] = await db.all("SELECT id, status FROM conversations WHERE id=? AND family_id=?", [id, family]);
+    const [conversation] = await db.all(
+      "SELECT id, status FROM conversations WHERE id=? AND family_id=?",
+      [id, family],
+    );
     if (!conversation) return res.sendStatus(404);
-    if (conversation.status !== "ready") return res.status(409).json({ error: "Espera a que termine el procesamiento" });
-    if (input.from === input.to) return res.status(400).json({ error: "Los textos son iguales" });
+    if (conversation.status !== "ready")
+      return res
+        .status(409)
+        .json({ error: "Espera a que termine el procesamiento" });
+    if (input.from === input.to)
+      return res.status(400).json({ error: "Los textos son iguales" });
     await db.transaction(async (tx) => {
-      const replace = async (table: string, column: string, scope: string, values: unknown[]) => {
-        await tx.all(`UPDATE ${table} SET ${column}=replace(${column}, ?, ?) WHERE ${scope}`, [input.from, input.to, ...values]);
+      const replace = async (
+        table: string,
+        column: string,
+        scope: string,
+        values: unknown[],
+      ) => {
+        await tx.all(
+          `UPDATE ${table} SET ${column}=replace(${column}, ?, ?) WHERE ${scope}`,
+          [input.from, input.to, ...values],
+        );
       };
       if (input.kind === "transcription") {
         // Explicitly requested spelling corrections apply to the whole family library.
         await replace("people", "name", "family_id=?", [family]);
-        for (const column of ["title", "summary"]) await replace("conversations", column, "family_id=?", [family]);
-        for (const column of ["text"]) await replace("segments", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
-        for (const column of ["quote", "statement"]) await replace("claims", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
-        for (const column of ["description", "place"]) await replace("events", column, "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)", [family]);
-        for (const column of ["title", "summary", "extracted_text"]) await replace("documents", column, "family_id=?", [family]);
-        for (const column of ["quote", "statement"]) await replace("document_claims", column, "document_id IN (SELECT id FROM documents WHERE family_id=?)", [family]);
-        for (const column of ["description", "place"]) await replace("document_events", column, "document_id IN (SELECT id FROM documents WHERE family_id=?)", [family]);
+        for (const column of ["title", "summary"])
+          await replace("conversations", column, "family_id=?", [family]);
+        for (const column of ["text"])
+          await replace(
+            "segments",
+            column,
+            "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)",
+            [family],
+          );
+        for (const column of ["quote", "statement"])
+          await replace(
+            "claims",
+            column,
+            "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)",
+            [family],
+          );
+        for (const column of ["description", "place"])
+          await replace(
+            "events",
+            column,
+            "conversation_id IN (SELECT id FROM conversations WHERE family_id=?)",
+            [family],
+          );
+        for (const column of ["title", "summary", "extracted_text"])
+          await replace("documents", column, "family_id=?", [family]);
+        for (const column of ["quote", "statement"])
+          await replace(
+            "document_claims",
+            column,
+            "document_id IN (SELECT id FROM documents WHERE family_id=?)",
+            [family],
+          );
+        for (const column of ["description", "place"])
+          await replace(
+            "document_events",
+            column,
+            "document_id IN (SELECT id FROM documents WHERE family_id=?)",
+            [family],
+          );
       } else {
         // Interpretation corrections leave the source transcript and quotations intact.
-        await replace("conversations", "summary", "id=? AND family_id=?", [id, family]);
+        await replace("conversations", "summary", "id=? AND family_id=?", [
+          id,
+          family,
+        ]);
         await replace("claims", "statement", "conversation_id=?", [id]);
         await replace("events", "description", "conversation_id=?", [id]);
-        await replace("relationships", "type", "family_id=? AND claim_id IN (SELECT id FROM claims WHERE conversation_id=?)", [family, id]);
+        await replace(
+          "relationships",
+          "type",
+          "family_id=? AND claim_id IN (SELECT id FROM claims WHERE conversation_id=?)",
+          [family, id],
+        );
       }
     });
     res.json({ ok: true });
   });
+  app.post(
+    "/review/transcribe",
+    multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+    }).single("audio"),
+    async (req, res) => {
+      if (!req.file)
+        return res.status(400).json({ error: "Falta la grabación" });
+      if (!["audio/webm", "audio/mp4", "audio/m4a"].includes(req.file.mimetype))
+        return res
+          .status(400)
+          .json({ error: "Formato de audio no compatible" });
+      const segments = await transcribe(req.file.buffer, req.file.mimetype);
+      res.json({ text: segments.map((segment) => segment.text).join(" ") });
+    },
+  );
+  app.post("/claims/:id/review", async (req, res) => {
+    const input = z
+      .object({
+        answer: z.string().trim().min(1).max(2000),
+        history: z
+          .array(
+            z.object({
+              role: z.enum(["user", "assistant"]),
+              text: z.string().max(2000),
+            }),
+          )
+          .max(12),
+      })
+      .parse(req.body);
+    const [claim] = await db.all(
+      "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
+      [uuid.parse(req.params.id), res.locals.familyId],
+    );
+    if (!claim) return res.sendStatus(404);
+    const relations = await db.all(
+      "SELECT id,type FROM relationships WHERE family_id=? AND claim_id=?",
+      [res.locals.familyId, claim.id],
+    );
+    const relation = relations.length === 1 ? relations[0] : null;
+    const result = await reviewClaim({
+      statement: claim.statement,
+      quote: claim.quote,
+      relationshipType: relation?.type || null,
+      ...input,
+    });
+    res.json({
+      ...result,
+      relationshipId: relation?.id || null,
+      originalStatement: claim.statement,
+    });
+  });
+  app.post("/claims/:id/review/apply", async (req, res) => {
+    const input = z
+      .object({
+        originalStatement: z.string().min(1).max(2000),
+        statement: z.string().trim().min(1).max(2000),
+        relationshipId: z.string().uuid().nullable(),
+        relationshipType: z.string().trim().min(1).max(100).nullable(),
+      })
+      .parse(req.body);
+    const claimId = uuid.parse(req.params.id);
+    const family = res.locals.familyId;
+    const result = await db.transaction(async (tx) => {
+      const [claim] = await tx.all(
+        "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
+        [claimId, family],
+      );
+      if (!claim) return "missing";
+      if (
+        claim.statement !== input.originalStatement ||
+        claim.certainty === "confirmed"
+      )
+        return "changed";
+      if (input.relationshipType) {
+        if (!input.relationshipId) return "changed";
+        const relations = await tx.all(
+          "SELECT id FROM relationships WHERE id=? AND claim_id=? AND family_id=?",
+          [input.relationshipId, claimId, family],
+        );
+        if (relations.length !== 1) return "changed";
+        await tx.all(
+          "UPDATE relationships SET type=? WHERE id=? AND family_id=?",
+          [input.relationshipType, input.relationshipId, family],
+        );
+      }
+      await tx.all(
+        "UPDATE claims SET statement=?,certainty='confirmed' WHERE id=?",
+        [input.statement, claimId],
+      );
+      return "ok";
+    });
+    if (result === "missing") return res.sendStatus(404);
+    if (result === "changed")
+      return res
+        .status(409)
+        .json({ error: "El dato cambió. Actualízalo antes de continuar." });
+    res.json({ ok: true });
+  });
   app.patch("/claims/:id", async (req, res) => {
-    const input = z.object({
-      certainty: certaintySchema.optional(),
-      statement: z.string().trim().min(1).max(2000).optional(),
-    }).refine((value) => value.certainty !== undefined || value.statement !== undefined).parse(req.body);
+    const input = z
+      .object({
+        certainty: certaintySchema.optional(),
+        statement: z.string().trim().min(1).max(2000).optional(),
+      })
+      .refine(
+        (value) =>
+          value.certainty !== undefined || value.statement !== undefined,
+      )
+      .parse(req.body);
     const [claim] = await db.all(
       "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
       [req.params.id, res.locals.familyId],
     );
     if (!claim) return res.sendStatus(404);
     await db.all("UPDATE claims SET certainty=?, statement=? WHERE id=?", [
-      input.certainty ?? (input.statement !== undefined ? "pending" : claim.certainty),
+      input.certainty ??
+        (input.statement !== undefined ? "pending" : claim.certainty),
       input.statement ?? claim.statement,
       claim.id,
     ]);
@@ -538,12 +964,10 @@ export function createApp(db: Sql) {
           .status(400)
           .json({ error: "Los datos enviados no son válidos" });
       if (error instanceof multer.MulterError)
-        return res
-          .status(413)
-          .json({
-            error:
-              "Archivo demasiado grande o demasiados archivos (documentos: 20 MB; audio: 100 MB)",
-          });
+        return res.status(413).json({
+          error:
+            "Archivo demasiado grande o demasiados archivos (documentos: 20 MB; audio: 100 MB)",
+        });
       console.error("Error interno del API (detalles privados omitidos).");
       res.status(500).json({ error: "No se pudo completar la operación" });
     },

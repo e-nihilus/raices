@@ -10,11 +10,13 @@ import {
   styles,
 } from "../../components/ui";
 import { MemoryCard } from "../../components/MemoryCard";
+import { router } from "expo-router";
 import { useLibrary } from "../../state/LibraryProvider";
 export default function Memories() {
   const lib = useLibrary();
   const [query, setQuery] = useState(""),
     [filter, setFilter] = useState("all");
+  const pending = lib.data.conversations.flatMap((c) => c.claims).filter((claim) => claim.certainty !== "confirmed").length;
   const list = lib.data.conversations.filter(
     (c) =>
       (filter === "all" ||
@@ -37,6 +39,7 @@ export default function Memories() {
           Historias vivas, anécdotas y conversaciones de tu familia.
         </Copy>
       </View>
+      {!lib.demo && pending > 0 && <Button label={`Revisar ${pending} ${pending === 1 ? "dato pendiente" : "datos pendientes"}`} icon="message-circle" onPress={() => router.push("/review" as never)} />}
       <TextInput
         accessibilityLabel="Buscar recuerdos"
         placeholder="Buscar por persona, lugar o palabra…"

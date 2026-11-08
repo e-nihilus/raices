@@ -29,3 +29,8 @@ CREATE TABLE IF NOT EXISTS document_event_claims (event_id TEXT NOT NULL REFEREN
 CREATE TABLE IF NOT EXISTS document_processing_jobs (id TEXT PRIMARY KEY, document_id TEXT NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL, lease_until TEXT, error TEXT);
 CREATE INDEX IF NOT EXISTS documents_family ON documents(family_id,created_at);
 CREATE INDEX IF NOT EXISTS document_jobs_pending ON document_processing_jobs(status,available_at);
+CREATE TABLE IF NOT EXISTS person_source_searches (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, query TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS person_source_searches_person ON person_source_searches(family_id,person_id,created_at);
+CREATE TABLE IF NOT EXISTS account_profiles (user_id TEXT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE, first_name TEXT NOT NULL, surname1 TEXT NOT NULL, surname2 TEXT NOT NULL, discoverable INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS family_link_requests (id TEXT PRIMARY KEY, sender_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, recipient_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, relationship TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS shared_tree_people (user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, PRIMARY KEY(user_id,person_id));

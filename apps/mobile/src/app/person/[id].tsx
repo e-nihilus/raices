@@ -1,4 +1,5 @@
-import { View } from "react-native";
+import { useEffect, useState } from "react";
+import { Linking, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { certaintyLabels } from "@raices/shared";
 import {
@@ -11,13 +12,179 @@ import {
   colors,
   styles,
 } from "../../components/ui";
+import { PersonSharing } from "../../components/SharedTree";
+import { FindRelative } from "../../components/AccountLinks";
 import { MemoryCard } from "../../components/MemoryCard";
 import { useLibrary } from "../../state/LibraryProvider";
+import { request } from "../../lib/api";
 import {
   demoFamilyParents,
   demoFamilyPartners,
   demoUser,
 } from "../../lib/demo";
+
+type SourceSearch = {
+  id: string;
+  query: string;
+  createdAt: string;
+  text: string;
+  citations: { url: string; title: string; start: number; end: number }[];
+};
+
+function SourceResearch({
+  personId,
+  name,
+  suggestions,
+}: {
+  personId: string;
+  name: string;
+  suggestions: string[];
+}) {
+  const [query, setQuery] = useState(name);
+  const [searches, setSearches] = useState<SourceSearch[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setQuery(name);
+    setSearches([]);
+    setError("");
+    request<SourceSearch[]>(`/people/${personId}/sources`)
+      .then((results) => {
+        if (active) setSearches(results);
+      })
+      .catch(() => {
+        if (active) setError("No se pudieron cargar las búsquedas anteriores.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [personId]);
+  return (
+    <Card>
+      <Copy kind="heading">Fuentes en internet</Copy>
+      <Copy kind="small">
+        Busca noticias y documentos relacionados con esta persona. Una
+        coincidencia de nombre no confirma su identidad ni demuestra que el
+        recuerdo sea cierto.
+      </Copy>
+      <Button
+        secondary
+        label={open ? "Cerrar búsqueda" : "Buscar fuentes"}
+        icon="search"
+        onPress={() => setOpen(!open)}
+      />
+      {open && (
+        <>
+          {!!suggestions.length && (
+            <Copy kind="small">Puedes partir de un dato guardado:</Copy>
+          )}
+          {suggestions.slice(0, 5).map((suggestion, i) => (
+            <Button
+              key={`${i}-${suggestion}`}
+              secondary
+              label={suggestion}
+              onPress={() => setQuery(suggestion)}
+            />
+          ))}
+          <TextInput
+            accessibilityLabel="Texto que se buscará en internet"
+            style={styles.input}
+            value={query}
+            onChangeText={setQuery}
+            multiline
+            maxLength={500}
+          />
+          <Copy kind="small">
+            Al buscar, este texto se enviará a OpenAI y podrá utilizarse en
+            consultas a proveedores de búsqueda. Incluye solo los datos que
+            quieras compartir.
+          </Copy>
+          <Button
+            label={busy ? "Buscando fuentes…" : "Buscar en internet"}
+            icon="search"
+            loading={busy}
+            disabled={query.trim().length < 5}
+            onPress={() =>
+              void (async () => {
+                setBusy(true);
+                setError("");
+                try {
+                  const result = await request<SourceSearch>(
+                    `/people/${personId}/sources`,
+                    { method: "POST", body: JSON.stringify({ query }) },
+                  );
+                  setSearches((previous) => [result, ...previous].slice(0, 20));
+                  setOpen(false);
+                } catch (e) {
+                  setError(
+                    e instanceof Error ? e.message : "No se pudo buscar",
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              })()
+            }
+          />
+        </>
+      )}
+      {!!error && <Copy kind="small">{error}</Copy>}
+      {searches.map((search) => {
+        const citations = [...search.citations].sort(
+          (a, b) => a.start - b.start,
+        );
+        let cursor = 0;
+        const fragments: React.ReactNode[] = [];
+        for (const citation of citations) {
+          if (citation.start < cursor || citation.end > search.text.length)
+            continue;
+          fragments.push(search.text.slice(cursor, citation.start));
+          fragments.push(
+            <Text
+              key={`${citation.start}-${citation.url}`}
+              accessibilityRole="link"
+              onPress={() =>
+                void Linking.openURL(citation.url).catch(() =>
+                  setError("No se pudo abrir el enlace."),
+                )
+              }
+              style={{ color: colors.primary, textDecorationLine: "underline" }}
+            >
+              {search.text.slice(citation.start, citation.end)} [
+              {citation.title}]
+            </Text>,
+          );
+          cursor = citation.end;
+        }
+        fragments.push(search.text.slice(cursor));
+        return (
+          <View
+            key={search.id}
+            style={{
+              gap: 8,
+              borderTopWidth: 1,
+              borderTopColor: colors.line,
+              paddingTop: 12,
+            }}
+          >
+            <Copy kind="label">{search.query}</Copy>
+            <Copy kind="small">
+              {new Date(search.createdAt).toLocaleDateString("es-ES")} ·
+              Resultado por revisar
+            </Copy>
+            <Copy>{fragments}</Copy>
+            {!citations.length && (
+              <Copy kind="small">
+                No se encontraron enlaces citados para comprobar este resultado.
+              </Copy>
+            )}
+          </View>
+        );
+      })}
+    </Card>
+  );
+}
 export default function Person() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const lib = useLibrary();
@@ -82,6 +249,10 @@ export default function Person() {
   ].filter((group) => group.ids.length > 0);
   return (
     <Screen back title="Ficha biográfica">
+      {lib.user && !lib.demo && <PersonSharing personId={person.id} />}
+      {lib.user && !lib.demo && (
+        <FindRelative personId={person.id} name={person.name} />
+      )}
       <View style={{ alignItems: "center", gap: 10 }}>
         <View
           style={{
@@ -114,6 +285,17 @@ export default function Person() {
           {person.aliases.join(" · ") || "Parte de nuestra historia"}
         </Copy>
       </View>
+      {!lib.demo && (
+        <SourceResearch
+          personId={person.id}
+          name={person.name}
+          suggestions={conversations.flatMap((conversation) =>
+            conversation.claims
+              .filter((claim) => claim.personId === id)
+              .map((claim) => claim.statement),
+          )}
+        />
+      )}
       {lib.demo && person.id === demoUser.personId && (
         <Card>
           <Copy kind="heading">Sobre Elena</Copy>

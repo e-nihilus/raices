@@ -11,6 +11,7 @@ import {
   colors,
   styles,
 } from "../../components/ui";
+import { SharedFamilyTree } from "../../components/SharedTree";
 import { FamilyTreeMap } from "../../components/FamilyTreeMap";
 import { useLibrary } from "../../state/LibraryProvider";
 
@@ -19,7 +20,7 @@ function openPerson(id: string) {
 }
 
 export default function Family() {
-  const { data, demo } = useLibrary();
+  const { data, demo, user } = useLibrary();
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const hasQuery = normalizedQuery.length > 0;
@@ -46,6 +47,7 @@ export default function Family() {
           onOpenPerson={openPerson}
         />
       )}
+      {user && !demo && <SharedFamilyTree />}
       {!demo && data.people.length > 0 && !data.relationships?.length && (
         <Copy kind="small">
           Las conexiones aparecerán cuando se identifiquen parentescos en las
