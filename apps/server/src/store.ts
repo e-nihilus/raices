@@ -65,6 +65,81 @@ export async function library(db: Sql, familyId: string): Promise<Library> {
     claimId: r.claim_id,
   }));
   const result: Library = { people, conversations: [], relationships };
+  result.documents = [];
+  for (const d of await db.all(
+    "SELECT * FROM documents WHERE family_id=? ORDER BY created_at DESC",
+    [familyId],
+  )) {
+    const documentRelationships = (
+      await db.all("SELECT * FROM document_relationships WHERE document_id=?", [
+        d.id,
+      ])
+    ).map((r) => ({
+      id: r.id,
+      fromId: r.person_a,
+      toId: r.person_b,
+      type: r.type,
+      claimId: r.claim_id,
+      sourceDocumentId: d.id,
+    }));
+    result.relationships!.push(...documentRelationships);
+    const documentEvents = [];
+    for (const event of await db.all(
+      "SELECT * FROM document_events WHERE document_id=? ORDER BY year",
+      [d.id],
+    ))
+      documentEvents.push({
+        id: event.id,
+        description: event.description,
+        type: event.type,
+        year: event.year,
+        place: event.place,
+        certainty: event.certainty,
+        personIds: (
+          await db.all(
+            "SELECT person_id FROM document_event_people WHERE event_id=?",
+            [event.id],
+          )
+        ).map((p) => p.person_id),
+        claimIds: (
+          await db.all(
+            "SELECT claim_id FROM document_event_claims WHERE event_id=?",
+            [event.id],
+          )
+        ).map((c) => c.claim_id),
+      });
+    result.documents.push({
+      id: d.id,
+      title: d.title,
+      kind: d.kind,
+      fileName: d.file_name,
+      mimeType: d.mime_type,
+      createdAt: d.created_at,
+      status: d.status,
+      summary: d.summary,
+      text: d.extracted_text,
+      error: d.error,
+      personIds: (
+        await db.all(
+          "SELECT person_id FROM document_people WHERE document_id=?",
+          [d.id],
+        )
+      ).map((p) => p.person_id),
+      claims: (
+        await db.all("SELECT * FROM document_claims WHERE document_id=?", [
+          d.id,
+        ])
+      ).map((c) => ({
+        id: c.id,
+        personId: c.person_id,
+        quote: c.quote,
+        statement: c.statement,
+        certainty: c.certainty,
+      })),
+      relationships: documentRelationships,
+      events: documentEvents,
+    });
+  }
   for (const c of conversations) {
     const segments = (
       await db.all(
@@ -291,6 +366,42 @@ export async function mergePeople(
     ]);
     await tx.all("UPDATE relationships SET person_b=? WHERE person_b=?", [
       targetId,
+      sourceId,
+    ]);
+    await tx.all("UPDATE document_claims SET person_id=? WHERE person_id=?", [
+      targetId,
+      sourceId,
+    ]);
+    await tx.all(
+      "UPDATE document_relationships SET person_a=? WHERE person_a=?",
+      [targetId, sourceId],
+    );
+    await tx.all(
+      "UPDATE document_relationships SET person_b=? WHERE person_b=?",
+      [targetId, sourceId],
+    );
+    await tx.all(
+      "DELETE FROM document_relationships WHERE person_a=person_b AND family_id=?",
+      [familyId],
+    );
+    for (const row of await tx.all(
+      "SELECT document_id FROM document_people WHERE person_id=?",
+      [sourceId],
+    ))
+      await tx.all(
+        "INSERT INTO document_people(document_id,person_id) VALUES(?,?) ON CONFLICT DO NOTHING",
+        [row.document_id, targetId],
+      );
+    await tx.all("DELETE FROM document_people WHERE person_id=?", [sourceId]);
+    for (const row of await tx.all(
+      "SELECT event_id FROM document_event_people WHERE person_id=?",
+      [sourceId],
+    ))
+      await tx.all(
+        "INSERT INTO document_event_people(event_id,person_id) VALUES(?,?) ON CONFLICT DO NOTHING",
+        [row.event_id, targetId],
+      );
+    await tx.all("DELETE FROM document_event_people WHERE person_id=?", [
       sourceId,
     ]);
     await tx.all(

@@ -106,11 +106,44 @@ export type Relationship = {
   toId: string;
   type: string;
   claimId: string;
+  sourceDocumentId?: string;
+};
+export type FamilyDocument = {
+  id: string;
+  title: string;
+  kind: string;
+  fileName: string;
+  mimeType: string;
+  createdAt: string;
+  status: "queued" | "reading" | "extracting" | "ready" | "failed";
+  summary: string;
+  text: string;
+  error: string | null;
+  personIds: string[];
+  claims: {
+    id: string;
+    personId: string | null;
+    quote: string;
+    statement: string;
+    certainty: Certainty;
+  }[];
+  relationships: Relationship[];
+  events: {
+    id: string;
+    description: string;
+    type: string;
+    year: number | null;
+    place: string | null;
+    certainty: Certainty;
+    personIds: string[];
+    claimIds: string[];
+  }[];
 };
 export type Library = {
   relationships?: Relationship[];
   conversations: Conversation[];
   people: Person[];
+  documents?: FamilyDocument[];
 };
 export const normalizeName = (name: string) =>
   name

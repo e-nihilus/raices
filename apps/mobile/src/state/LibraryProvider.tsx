@@ -28,7 +28,7 @@ import {
 } from "../lib/api";
 import { persistAudio, removeAudio, shareJson } from "../lib/audio-files";
 import { demoLibrary } from "../lib/demo";
-const empty: Library = { conversations: [], people: [] };
+const empty: Library = { conversations: [], people: [], documents: [] };
 function useLibraryState() {
   const [data, setData] = useState<Library>(empty),
     [loaded, setLoaded] = useState(false),
@@ -159,6 +159,9 @@ function useLibraryState() {
       .catch(() => {});
     const timer = setInterval(() => {
       if (
+        current.current.documents?.some((d) =>
+          ["queued", "reading", "extracting"].includes(d.status),
+        ) ||
         current.current.conversations.some((c) =>
           ["queued", "transcribing", "extracting"].includes(c.status),
         )

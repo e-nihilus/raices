@@ -13,6 +13,14 @@ import { certaintySchema } from "@raices/shared";
 import { type Sql } from "./db.ts";
 import { ensureFamily, library, mergePeople, json } from "./store.ts";
 import { cloud, saveAudio, deleteAudio, readAudio } from "./audio.ts";
+import { aiConfigured } from "./ai.ts";
+import {
+  deleteDocumentFile,
+  readDocumentFile,
+  saveDocumentFile,
+  supportedDocuments,
+  validDocumentFile,
+} from "./documents.ts";
 import {
   createAccount,
   createSession,
@@ -36,11 +44,16 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 5 },
 });
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 3 },
+});
 const safeEquals = (a: string, b: string) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
 export function createApp(db: Sql) {
   const app = express();
+  app.set("trust proxy", 1);
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
   const origins = (
     process.env.ALLOWED_ORIGINS || "http://localhost:8081"
@@ -56,7 +69,7 @@ export function createApp(db: Sql) {
   app.get("/health", (_req, res) =>
     res.json({
       ok: true,
-      aiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      aiConfigured: aiConfigured(),
       storage: cloud ? "supabase" : "local",
     }),
   );
@@ -77,6 +90,27 @@ export function createApp(db: Sql) {
     if (!c) return res.sendStatus(404);
     res.setHeader("Cache-Control", "private, no-store");
     res.type(c.mime_type).send(await readAudio(c.audio_path));
+  });
+  app.get("/document-file/:id", async (req, res) => {
+    const { expires, sig } = req.query;
+    if (
+      typeof expires !== "string" ||
+      typeof sig !== "string" ||
+      !/^\d+$/.test(expires) ||
+      Number(expires) < Date.now() ||
+      !safeEquals(sig, signature(`document:${req.params.id}`, expires))
+    )
+      return res.sendStatus(403);
+    const [doc] = await db.all("SELECT * FROM documents WHERE id=?", [
+      req.params.id,
+    ]);
+    if (!doc) return res.sendStatus(404);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${doc.id}.${doc.mime_type === "application/pdf" ? "pdf" : doc.mime_type.split("/")[1]}"`,
+    );
+    res.type(doc.mime_type).send(await readDocumentFile(doc.storage_path));
   });
   const authLimit = rateLimit({ windowMs: 60_000, limit: 10 });
   app.get("/auth/username-available", authLimit, async (req, res) => {
@@ -166,6 +200,114 @@ export function createApp(db: Sql) {
   app.get("/library", async (_req, res) =>
     res.json(await library(db, res.locals.familyId)),
   );
+  app.post(
+    "/documents",
+    rateLimit({ windowMs: 60_000, limit: 10 }),
+    documentUpload.single("file"),
+    async (req, res) => {
+      if (!req.file)
+        return res
+          .status(400)
+          .json({ error: "Selecciona un PDF o una imagen" });
+      const mime = req.file.mimetype;
+      if (
+        !supportedDocuments.includes(mime) ||
+        !validDocumentFile(req.file.buffer, mime)
+      )
+        return res
+          .status(400)
+          .json({ error: "Usa un PDF, JPG, PNG o WebP válido" });
+      const title = z.string().trim().min(1).max(180).parse(req.body.title);
+      const kind = z
+        .string()
+        .trim()
+        .min(1)
+        .max(80)
+        .parse(req.body.kind || "Documento familiar");
+      const id = randomUUID();
+      const family = res.locals.familyId;
+      const path = `${family}/${id}`;
+      await saveDocumentFile(path, req.file.buffer, mime);
+      try {
+        await db.transaction(async (tx) => {
+          await tx.all(
+            "INSERT INTO documents(id,family_id,title,kind,file_name,mime_type,storage_path,created_at,status) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+              id,
+              family,
+              title,
+              kind,
+              req.file!.originalname.slice(0, 180),
+              mime,
+              path,
+              new Date().toISOString(),
+              "queued",
+            ],
+          );
+          await tx.all(
+            "INSERT INTO document_processing_jobs(id,document_id,available_at) VALUES(?,?,?)",
+            [randomUUID(), id, new Date().toISOString()],
+          );
+        });
+      } catch (error) {
+        await deleteDocumentFile(path);
+        throw error;
+      }
+      res.status(201).json({ id, status: "queued" });
+    },
+  );
+  const document = async (id: string, family: string) =>
+    (
+      await db.all("SELECT * FROM documents WHERE id=? AND family_id=?", [
+        id,
+        family,
+      ])
+    )[0];
+  app.get("/documents/:id/file-url", async (req, res) => {
+    const doc = await document(req.params.id as string, res.locals.familyId);
+    if (!doc) return res.sendStatus(404);
+    if (cloud) {
+      const { data, error } = await cloud.storage
+        .from("family-documents")
+        .createSignedUrl(doc.storage_path, 600);
+      if (error) throw error;
+      return res.json({ url: data.signedUrl });
+    }
+    const expires = String(Date.now() + 600_000);
+    res.json({
+      url: `/document-file/${doc.id}?expires=${expires}&sig=${signature(`document:${doc.id}`, expires)}`,
+    });
+  });
+  app.post("/documents/:id/retry", async (req, res) => {
+    const doc = await document(req.params.id as string, res.locals.familyId);
+    if (!doc) return res.sendStatus(404);
+    if (doc.status !== "failed")
+      return res
+        .status(409)
+        .json({ error: "El documento no está pendiente de reintento" });
+    await db.transaction(async (tx) => {
+      await tx.all(
+        "UPDATE document_processing_jobs SET status='queued',attempts=0,error=NULL,available_at=? WHERE document_id=?",
+        [new Date().toISOString(), doc.id],
+      );
+      await tx.all(
+        "UPDATE documents SET status='queued',error=NULL WHERE id=?",
+        [doc.id],
+      );
+    });
+    res.json({ ok: true });
+  });
+  app.delete("/documents/:id", async (req, res) => {
+    const doc = await document(req.params.id as string, res.locals.familyId);
+    if (!doc) return res.sendStatus(404);
+    if (["reading", "extracting"].includes(doc.status))
+      return res
+        .status(409)
+        .json({ error: "Espera a que termine el procesamiento" });
+    await deleteDocumentFile(doc.storage_path);
+    await db.all("DELETE FROM documents WHERE id=?", [doc.id]);
+    res.json({ ok: true });
+  });
   app.get("/export", async (_req, res) => {
     res.attachment("raices-recuerdos.json");
     res.json({
@@ -358,7 +500,10 @@ export function createApp(db: Sql) {
       if (error instanceof multer.MulterError)
         return res
           .status(413)
-          .json({ error: "Sube un único archivo de audio de menos de 100 MB" });
+          .json({
+            error:
+              "Archivo demasiado grande o demasiados archivos (documentos: 20 MB; audio: 100 MB)",
+          });
       console.error("Error interno del API (detalles privados omitidos).");
       res.status(500).json({ error: "No se pudo completar la operación" });
     },

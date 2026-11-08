@@ -2,11 +2,15 @@ import { readAudio } from "./audio.ts";
 import { transcribe, extract } from "./ai.ts";
 import { personFrom, saveExtraction } from "./store.ts";
 import type { Sql } from "./db.ts";
+import { processNextDocument } from "./documents.ts";
 export async function processNext(
   db: Sql,
   providers = { transcribe, extract, readAudio },
 ) {
-  if (!process.env.OPENAI_API_KEY && providers.transcribe === transcribe)
+  if (
+    (providers.transcribe === transcribe && !process.env.ELEVENLABS_API_KEY) ||
+    (providers.extract === extract && !process.env.OPENAI_API_KEY)
+  )
     return false;
   const now = new Date().toISOString();
   const lease = new Date(Date.now() + 30 * 60_000).toISOString();
@@ -36,6 +40,7 @@ export async function processNext(
     try {
       const segments = await providers.transcribe(
         await providers.readAudio(conversation.audio_path),
+        conversation.mime_type,
       );
       await db.all("UPDATE conversations SET status='extracting' WHERE id=?", [
         conversation.id,
@@ -84,6 +89,7 @@ export function startWorker(db: Sql) {
     busy = true;
     try {
       await processNext(db);
+      await processNextDocument(db);
     } catch {
       console.error("Error de cola; se volverá a intentar.");
     } finally {

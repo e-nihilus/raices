@@ -1,6 +1,7 @@
 import { sessionStorage } from "./session-storage";
 import { Platform } from "react-native";
 import type { Conversation } from "@raices/shared";
+import type { DocumentPickerAsset } from "expo-document-picker";
 import { resolveAudio } from "./audio-files";
 export const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "").replace(
   /\/$/,
@@ -166,5 +167,32 @@ export async function audioUrl(c: Conversation) {
   const { url } = await request<{ url: string }>(
     `/conversations/${c.id}/audio-url`,
   );
+  return url.startsWith("/") ? `${apiUrl}${url}` : url;
+}
+export async function uploadDocument(
+  asset: DocumentPickerAsset,
+  title: string,
+  kind: string,
+) {
+  const data = new FormData();
+  data.append("title", title);
+  data.append("kind", kind);
+  if (Platform.OS === "web") {
+    if (!asset.file)
+      throw new Error("No se puede leer el archivo seleccionado");
+    data.append("file", asset.file, asset.name);
+  } else
+    data.append("file", {
+      uri: asset.uri,
+      name: asset.name,
+      type: asset.mimeType || "application/octet-stream",
+    } as unknown as Blob);
+  return request<{ id: string; status: string }>("/documents", {
+    method: "POST",
+    body: data,
+  });
+}
+export async function documentUrl(id: string) {
+  const { url } = await request<{ url: string }>(`/documents/${id}/file-url`);
   return url.startsWith("/") ? `${apiUrl}${url}` : url;
 }

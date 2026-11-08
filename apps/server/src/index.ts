@@ -1,6 +1,7 @@
 import { createDatabase } from "./db.ts";
 import { createApp } from "./app.ts";
 import { startWorker } from "./worker.ts";
+import { aiConfigured } from "./ai.ts";
 if (
   !process.env.DATABASE_URL &&
   (process.env.NODE_ENV === "production" ||
@@ -24,7 +25,7 @@ const server = createApp(db).listen(
   process.env.HOST || "127.0.0.1",
   () =>
     console.log(
-      `Raíces API en puerto ${process.env.PORT || 3001}. IA ${process.env.OPENAI_API_KEY ? "configurada" : "pendiente de configurar"}.`,
+      `Raíces API en puerto ${process.env.PORT || 3001}. IA ${aiConfigured() ? "configurada" : "pendiente de configurar"}.`,
     ),
 );
 for (const signal of ["SIGINT", "SIGTERM"] as const)

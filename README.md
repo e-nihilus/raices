@@ -61,8 +61,9 @@ SUPABASE_URL=https://tu-proyecto.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 SUPABASE_CA_CERT_BASE64=contenido-base64-del-certificado-de-supabase
 OPENAI_API_KEY=tu-clave-privada
-TRANSCRIPTION_MODEL=whisper-1
+ELEVENLABS_API_KEY=tu-clave-privada-de-elevenlabs
 EXTRACTION_MODEL=gpt-4.1-mini
+DOCUMENT_MODEL=gpt-4.1-mini
 ALLOWED_ORIGINS=https://tu-proyecto.vercel.app
 ```
 
@@ -81,9 +82,11 @@ Pega el resultado en `SUPABASE_CA_CERT_BASE64`. No copies el certificado ni las 
 EXPO_PUBLIC_API_URL=https://tu-api.up.railway.app
 ```
 
-5. Ejecuta las migraciones SQL en Supabase, actualiza `ALLOWED_ORIGINS` en Railway con tu dominio final de Vercel y vuelve a desplegar ambos proyectos. Crea la cuenta desde la app con un nombre y una contraseña.
+5. Ejecuta las migraciones SQL en Supabase, incluida `supabase/migrations/202611080001_documents.sql` **antes de desplegar esta versión**. Actualiza `ALLOWED_ORIGINS` en Railway con tu dominio final de Vercel y vuelve a desplegar ambos proyectos. Crea la cuenta desde la app con un nombre y una contraseña.
 
-Las variables `EXPO_PUBLIC_*` se integran en el JavaScript de la web; sólo deben contener la URL pública del API. `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y las claves de IA permanecen exclusivamente en Railway.
+Las variables `EXPO_PUBLIC_*` se integran en el JavaScript de la web; sólo deben contener la URL pública del API. `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y las claves de IA permanecen exclusivamente en Railway. `TRANSCRIPTION_MODEL=whisper-1` ya no se utiliza; el servidor envía el audio a Scribe v2 cuando `ELEVENLABS_API_KEY` está configurada.
+
+La clave de ElevenLabs debe tener permiso **Speech to Text: Access**. Si la creaste en **Shared Variables** de Railway, vincula `ELEVENLABS_API_KEY` al servicio `@raices/server` y aplica el despliegue.
 
 Para conectar un teléfono físico al backend local:
 
@@ -96,6 +99,7 @@ Para conectar un teléfono físico al backend local:
 - Inicio con un botón grande para grabar; pausa, continuación y marcas de momentos.
 - Guardado persistente del audio: documentos de la app en móvil e IndexedDB en web.
 - Importación de un audio de hasta 100 MB.
+- Subida privada de fotos de documentos y PDF (hasta 20 MB); lectura de texto, citas y relaciones propuestas en el árbol.
 - Pantalla de guardado, título editable, biblioteca, búsqueda y estados reales.
 - Reproducción, avance y retroceso de 15 segundos; reproducción desde un fragmento.
 - Pantallas de familia y línea temporal con fuentes.
@@ -103,7 +107,7 @@ Para conectar un teléfono físico al backend local:
 - Exportación de JSON y del audio local, y eliminación de un recuerdo.
 - Backend local con SQLite, cuentas con nombre único y contraseña, sesiones privadas y cola persistente.
 
-Sin una clave de IA, los audios recibidos quedan **en cola**: no se inventan resúmenes, transcripciones ni progresos.
+Si falta `ELEVENLABS_API_KEY` o `OPENAI_API_KEY`, los audios recibidos quedan **en cola**: no se inventan resúmenes, transcripciones ni progresos.
 
 ## Activar IA sin Supabase
 
@@ -113,19 +117,22 @@ En `apps/server/.env`:
 
 ```dotenv
 OPENAI_API_KEY=tu_clave_privada
-TRANSCRIPTION_MODEL=whisper-1
+ELEVENLABS_API_KEY=tu_clave_privada_de_elevenlabs
 EXTRACTION_MODEL=gpt-4.1-mini
+DOCUMENT_MODEL=gpt-4.1-mini
 ```
 
 Reinicia `npm run server`. El worker empezará a consumir los audios pendientes. Las llamadas al proveedor tendrán el coste de tu cuenta. No se han realizado llamadas reales ni se han usado credenciales externas durante el desarrollo.
 
-El adaptador usa transcripción con tiempos de segmentos y extracción JSON validada con Zod. Los modelos son configurables. Esta versión **no separa ni identifica automáticamente los hablantes**: utiliza `speaker=null` y la interfaz dice “Hablante sin identificar”. Elige un modelo compatible con el formato del adaptador; cambiar únicamente el nombre a un modelo con otra API no basta.
+Scribe v2 transcribe el audio con marcas de tiempo y diarización. La interfaz muestra **Hablante 1**, **Hablante 2**, etc. para distinguir las voces dentro de cada grabación; esas etiquetas no identifican por sí solas a las personas por nombre. OpenAI extrae después los datos y relaciones, validados con Zod. Los formatos compatibles se envían directamente a ElevenLabs; FFmpeg convierte a MP3 los formatos que no admita el adaptador.
+
+Los documentos admiten PDF, JPG, PNG y WebP. OpenAI lee su texto y extrae datos genealógicos con citas literales. Los nombres completos iguales se enlazan cuando hay una única coincidencia; los apellidos compartidos sugieren posibles identidades para revisión, sin fusionarlas automáticamente. Los parentescos extraídos quedan **por confirmar** y conservan el documento original como fuente. Los archivos sin texto legible se guardan, pero no generan parentescos.
 
 ## Activar Supabase
 
 1. Crea un proyecto Supabase; elige región teniendo en cuenta dónde guardarás las conversaciones.
-2. Ejecuta, en orden, `supabase/migrations/202610110001_initial.sql` y `supabase/migrations/202610260001_username_auth.sql` en su SQL Editor o con Supabase CLI.
-3. Las migraciones crean las tablas, las cuentas de usuario, las políticas de lectura por familia y el bucket privado `family-audio`.
+2. Ejecuta, en orden, `supabase/migrations/202610110001_initial.sql`, `supabase/migrations/202610260001_username_auth.sql` y `supabase/migrations/202611080001_documents.sql` en su SQL Editor o con Supabase CLI. Si las dos primeras ya están aplicadas, ejecuta sólo la tercera antes del despliegue del nuevo servidor.
+3. Las migraciones crean las tablas, las cuentas de usuario, las políticas de lectura por familia y los buckets privados `family-audio` y `family-documents`.
 4. En `apps/server/.env`, configura `DATABASE_URL`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Usa la cadena PostgreSQL o pooler de **sesión**, manteniendo SSL verificado. Descarga el certificado raíz en **Database → Settings → SSL Configuration**, guárdalo como `apps/server/supabase-ca.crt` y configura `SUPABASE_CA_CERT_PATH=supabase-ca.crt`. La contraseña de la base de datos debe estar correctamente codificada en la URL.
 5. En `apps/mobile/.env`, configura `EXPO_PUBLIC_API_URL`.
 6. Reinicia ambos procesos. Crea una cuenta desde la aplicación con nombre de usuario y contraseña; no se pide correo.
@@ -134,7 +141,7 @@ El servidor crea un espacio familiar personal al registrar la cuenta. El esquema
 
 Las sesiones nuevas se validan en el backend mediante un token aleatorio guardado como hash en la base de datos. La contraseña se guarda con scrypt y sal aleatoria, nunca en claro. El nombre se compara sin distinguir mayúsculas y la restricción única de la base de datos evita duplicados simultáneos. Las escrituras pasan por el backend. La conexión PostgreSQL del servidor debe tener permisos suficientes para administrar estas tablas; nunca la distribuyas con la app. El servidor usa la clave de servicio para administrar el bucket privado. Las cuentas antiguas de Supabase Auth siguen siendo reconocidas por el API, pero el acceso nuevo desde la app utiliza las cuentas por nombre.
 
-Las migraciones y políticas SQL ya están aplicadas al proyecto Supabase configurado para este entorno. SQLite local no se migra automáticamente a Supabase. Exporta tus datos y audios antes de cambiar de modo; la importación de ese archivo JSON es trabajo posterior.
+La migración de documentos debe aplicarse al proyecto Supabase antes de publicar este cambio. SQLite local no se migra automáticamente a Supabase. Exporta tus datos y audios antes de cambiar de modo; la importación de ese archivo JSON es trabajo posterior.
 
 ## Estructura
 

@@ -49,7 +49,7 @@ export default function Family() {
       {!demo && data.people.length > 0 && !data.relationships?.length && (
         <Copy kind="small">
           Las conexiones aparecerán cuando se identifiquen parentescos en las
-          conversaciones.
+          conversaciones o documentos.
         </Copy>
       )}
       <TextInput
@@ -105,7 +105,7 @@ export default function Family() {
       {!data.people.length && (
         <Empty
           title="Las historias nos conectan"
-          text="Cuando proceses una conversación con IA, las personas mencionadas aparecerán aquí con sus recuerdos y fuentes."
+          text="Cuando proceses una conversación o documento con IA, las personas mencionadas aparecerán aquí con sus fuentes."
         />
       )}
       <Pressable
@@ -128,6 +128,33 @@ export default function Family() {
           <Icon name="chevron-right" />
         </View>
       </Pressable>
+      {!!data.documents?.length && (
+        <View style={{ gap: 8 }}>
+          <Copy kind="heading">Documentos familiares</Copy>
+          {data.documents.map((doc) => (
+            <Pressable
+              key={doc.id}
+              onPress={() =>
+                router.push({
+                  pathname: "/document/[id]",
+                  params: { id: doc.id },
+                } as never)
+              }
+            >
+              <Card>
+                <Copy kind="label">{doc.title}</Copy>
+                <Copy kind="small">
+                  {doc.status === "ready"
+                    ? `${doc.personIds.length} personas · ${doc.relationships.length} relaciones`
+                    : doc.status === "failed"
+                      ? "Análisis fallido · toca para reintentar"
+                      : "Procesando documento…"}
+                </Copy>
+              </Card>
+            </Pressable>
+          ))}
+        </View>
+      )}
     </Screen>
   );
 }

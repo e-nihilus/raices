@@ -20,7 +20,7 @@ const segments: Segment[] = [
     start: 32,
     end: 46,
     text: "Mi hermano Antonio y yo nos mudamos de Jaén a Madrid en 1964.",
-    speaker: null,
+    speaker: "Hablante 1",
   },
 ];
 const extraction: Extraction = {
@@ -129,6 +129,7 @@ test("guarda fuentes y relaciones en una transacción sin duplicar al reintentar
     assert.equal(data.people.length, 2);
     assert.equal(data.conversations[0].claims.length, 1);
     assert.equal(data.conversations[0].segments[0].start, 32);
+    assert.equal(data.conversations[0].segments[0].speaker, "Hablante 1");
     assert.equal(data.conversations[0].events[0].personIds.length, 2);
     assert.equal((await db.all("SELECT * FROM relationships")).length, 1);
     assert.equal(data.conversations[0].status, "ready");

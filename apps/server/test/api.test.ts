@@ -57,6 +57,56 @@ test("API: autenticación, upload, idempotencia, reproducción, exportación y b
     );
     const library = await (await fetch(`${url}/library`, { headers })).json();
     assert.equal(library.conversations.length, 1);
+    const documentForm = new FormData();
+    documentForm.append("title", "Partida familiar");
+    documentForm.append("kind", "Documento oficial");
+    documentForm.append(
+      "file",
+      new Blob([Buffer.from("%PDF-1.7\nfixture")], { type: "application/pdf" }),
+      "partida.pdf",
+    );
+    const uploadedDocument = await fetch(`${url}/documents`, {
+      method: "POST",
+      headers,
+      body: documentForm,
+    });
+    assert.equal(uploadedDocument.status, 201);
+    const documentId = (await uploadedDocument.json()).id;
+    const documentLibrary = await (
+      await fetch(`${url}/library`, { headers })
+    ).json();
+    assert.equal(documentLibrary.documents[0].id, documentId);
+    const signedDocument = await (
+      await fetch(`${url}/documents/${documentId}/file-url`, { headers })
+    ).json();
+    assert.equal(
+      await (await fetch(`${url}${signedDocument.url}`)).text(),
+      "%PDF-1.7\nfixture",
+    );
+    assert.equal(
+      (await fetch(`${url}/document-file/${documentId}?expires=1&sig=bad`))
+        .status,
+      403,
+    );
+    const stranger = await fetch(`${url}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "OtraPersona",
+        password: "strong-password-123",
+      }),
+    });
+    const strangerHeaders = {
+      Authorization: `Bearer ${(await stranger.json()).token}`,
+    };
+    assert.equal(
+      (
+        await fetch(`${url}/documents/${documentId}/file-url`, {
+          headers: strangerHeaders,
+        })
+      ).status,
+      404,
+    );
     const signed = await (
       await fetch(`${url}/conversations/${id}/audio-url`, { headers })
     ).json();
@@ -83,6 +133,15 @@ test("API: autenticación, upload, idempotencia, reproducción, exportación y b
     assert.equal(
       (await fetch(`${url}/conversations/${id}`, { method: "DELETE", headers }))
         .status,
+      200,
+    );
+    assert.equal(
+      (
+        await fetch(`${url}/documents/${documentId}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
       200,
     );
     assert.equal(

@@ -33,9 +33,16 @@ export default function Person() {
       c.claims.some((cl) => cl.personId === id) ||
       c.events.some((e) => e.personIds.includes(id)),
   );
+  const documents =
+    lib.data.documents?.filter((d) => d.personIds.includes(id)) || [];
   const events = conversations
     .flatMap((c) => c.events.filter((e) => e.personIds.includes(id)))
     .sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity));
+  const documentEvents = documents.flatMap((doc) =>
+    doc.events
+      .filter((event) => event.personIds.includes(id))
+      .map((event) => ({ doc, event })),
+  );
   const sameParents = (first: string, second: string) => {
     const a = demoFamilyParents[first] || [];
     const b = demoFamilyParents[second] || [];
@@ -99,7 +106,7 @@ export default function Person() {
         </Copy>
         {lib.demo && <Badge warm>Perfil de ejemplo · datos ficticios</Badge>}
         <Badge>
-          {conversations.length
+          {conversations.length || documents.length
             ? "Historia y fuentes disponibles"
             : "En memoria viva"}
         </Badge>
@@ -153,7 +160,8 @@ export default function Person() {
           <View>
             <Copy kind="label">Archivo personal</Copy>
             <Copy kind="small">
-              {conversations.length} recuerdos · {events.length} acontecimientos
+              {conversations.length} recuerdos · {documents.length} documentos ·{" "}
+              {events.length + documentEvents.length} acontecimientos
             </Copy>
           </View>
           <Icon name="heart" color={colors.terra} />
@@ -230,7 +238,7 @@ export default function Person() {
         );
       })}
       <Copy kind="heading">Su línea de vida</Copy>
-      {events.length ? (
+      {events.length || documentEvents.length ? (
         events.map((e) => (
           <Card key={e.id}>
             <Badge>{e.year || "Fecha por conocer"}</Badge>
@@ -255,10 +263,49 @@ export default function Person() {
           Todavía faltan acontecimientos por descubrir.
         </Copy>
       )}
+      {documentEvents.map(({ doc, event }) => (
+        <Card key={event.id}>
+          <Badge>{event.year || "Fecha por conocer"}</Badge>
+          <Copy kind="heading">{event.description}</Copy>
+          {event.place && <Copy kind="small">{event.place}</Copy>}
+          <Badge warm>Por confirmar</Badge>
+          <Button
+            secondary
+            label="Ver documento y cita"
+            onPress={() =>
+              router.push({
+                pathname: "/document/[id]",
+                params: { id: doc.id },
+              } as never)
+            }
+          />
+        </Card>
+      ))}
       <Copy kind="heading">Su voz en los recuerdos</Copy>
       {conversations.map((c) => (
         <MemoryCard key={c.id} memory={c} />
       ))}
+      {!!documents.length && (
+        <>
+          <Copy kind="heading">Documentos donde aparece</Copy>
+          {documents.map((doc) => (
+            <Card key={doc.id}>
+              <Copy kind="label">{doc.title}</Copy>
+              <Copy kind="small">{doc.kind}</Copy>
+              <Button
+                secondary
+                label="Ver citas y original"
+                onPress={() =>
+                  router.push({
+                    pathname: "/document/[id]",
+                    params: { id: doc.id },
+                  } as never)
+                }
+              />
+            </Card>
+          ))}
+        </>
+      )}
       <Card style={{ backgroundColor: "#f5f1eb", borderWidth: 0 }}>
         <Copy kind="heading">Grados de certeza</Copy>
         <Copy kind="small">
