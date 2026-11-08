@@ -4,16 +4,24 @@ import { randomUUID } from "node:crypto";
 import { createDatabase } from "../src/db.ts";
 import { createApp } from "../src/app.ts";
 test("API: autenticación, upload, idempotencia, reproducción, exportación y borrado", async () => {
-  process.env.DEV_API_TOKEN = "test-local-token-with-more-than-24-characters";
   const db = createDatabase(":memory:");
   const server = createApp(db).listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("No address");
   const url = `http://127.0.0.1:${addr.port}`;
-  const headers = { Authorization: `Bearer ${process.env.DEV_API_TOKEN}` };
   try {
     assert.equal((await fetch(`${url}/library`)).status, 401);
+    const account = await fetch(`${url}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "Prueba",
+        password: "strong-password-123",
+      }),
+    });
+    assert.equal(account.status, 201);
+    const headers = { Authorization: `Bearer ${(await account.json()).token}` };
     const id = randomUUID();
     const form = () => {
       const body = new FormData();

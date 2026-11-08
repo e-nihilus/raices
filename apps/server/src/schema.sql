@@ -1,4 +1,8 @@
 CREATE TABLE IF NOT EXISTS families (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS app_users (id TEXT PRIMARY KEY, username TEXT NOT NULL, username_key TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS app_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS app_sessions_user ON app_sessions(user_id);
+CREATE TABLE IF NOT EXISTS app_family_members (family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE, PRIMARY KEY(family_id,user_id));
 CREATE TABLE IF NOT EXISTS family_members (family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, user_id TEXT NOT NULL, PRIMARY KEY(family_id,user_id));
 CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, title TEXT NOT NULL, created_at TEXT NOT NULL, duration REAL NOT NULL DEFAULT 0, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', error TEXT, audio_path TEXT NOT NULL, mime_type TEXT NOT NULL, bookmarks TEXT NOT NULL DEFAULT '[]', extraction TEXT);
 CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE, name TEXT NOT NULL, aliases TEXT NOT NULL DEFAULT '[]', candidate_ids TEXT NOT NULL DEFAULT '[]');

@@ -13,7 +13,25 @@ import { certaintySchema } from "@raices/shared";
 import { type Sql } from "./db.ts";
 import { ensureFamily, library, mergePeople, json } from "./store.ts";
 import { cloud, saveAudio, deleteAudio, readAudio } from "./audio.ts";
+import {
+  createAccount,
+  createSession,
+  publicUser,
+  revokeSession,
+  sessionUser,
+  usernameKey,
+  verifyPassword,
+} from "./auth.ts";
 const uuid = z.uuid();
+const credentials = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(3)
+    .max(40)
+    .regex(/^[\p{L}\p{N}_.-]+$/u),
+  password: z.string().min(8).max(200),
+});
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 5 },
@@ -30,7 +48,7 @@ export function createApp(db: Sql) {
   app.use(cors({ origin: origins }));
   app.use(express.json({ limit: "100kb" }));
   app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
-  const signingSecret = process.env.DEV_API_TOKEN || randomUUID();
+  const signingSecret = randomUUID();
   const signature = (id: string, expires: string) =>
     createHmac("sha256", signingSecret)
       .update(`${id}:${expires}`)
@@ -60,16 +78,66 @@ export function createApp(db: Sql) {
     res.setHeader("Cache-Control", "private, no-store");
     res.type(c.mime_type).send(await readAudio(c.audio_path));
   });
+  const authLimit = rateLimit({ windowMs: 60_000, limit: 10 });
+  app.get("/auth/username-available", authLimit, async (req, res) => {
+    const result = credentials.shape.username.safeParse(req.query.username);
+    if (!result.success)
+      return res.status(400).json({
+        error:
+          "El nombre debe tener entre 3 y 40 caracteres y usar letras, números, puntos, guiones o guion bajo",
+      });
+    const [existing] = await db.all(
+      "SELECT id FROM app_users WHERE username_key=?",
+      [usernameKey(result.data)],
+    );
+    res.json({ available: !existing });
+  });
+  app.post("/auth/register", authLimit, async (req, res) => {
+    const result = credentials.safeParse(req.body);
+    if (!result.success)
+      return res.status(400).json({
+        error:
+          "Introduce un nombre válido y una contraseña de al menos 8 caracteres",
+      });
+    const user = await createAccount(
+      db,
+      result.data.username,
+      result.data.password,
+    );
+    if (!user)
+      return res
+        .status(409)
+        .json({ error: "Ese nombre de usuario ya está seleccionado" });
+    const token = await createSession(db, user.id);
+    res.status(201).json({ user, token });
+  });
+  app.post("/auth/login", authLimit, async (req, res) => {
+    const result = credentials.safeParse(req.body);
+    if (!result.success)
+      return res
+        .status(400)
+        .json({ error: "Nombre de usuario o contraseña incorrectos" });
+    const [user] = await db.all(
+      "SELECT * FROM app_users WHERE username_key=?",
+      [usernameKey(result.data.username)],
+    );
+    if (
+      !user ||
+      !(await verifyPassword(result.data.password, user.password_hash))
+    )
+      return res
+        .status(401)
+        .json({ error: "Nombre de usuario o contraseña incorrectos" });
+    const token = await createSession(db, user.id);
+    res.json({ user: publicUser(user), token });
+  });
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const token = req.headers.authorization?.replace(/^Bearer /, "") || "";
-    if (
-      process.env.NODE_ENV !== "production" &&
-      !process.env.DATABASE_URL &&
-      process.env.DEV_API_TOKEN &&
-      safeEquals(token, process.env.DEV_API_TOKEN)
-    )
-      res.locals.userId = "local-development";
-    else if (cloud && token) {
+    const account = await sessionUser(db, token);
+    if (account) {
+      res.locals.userId = account.id;
+      res.locals.account = account;
+    } else if (cloud && token.split(".").length === 3) {
       const { data, error } = await cloud.auth.getUser(token);
       if (!error && data.user) res.locals.userId = data.user.id;
     }
@@ -77,8 +145,23 @@ export function createApp(db: Sql) {
       return res
         .status(401)
         .json({ error: "Inicia sesión para acceder a tus recuerdos" });
-    res.locals.familyId = await ensureFamily(db, res.locals.userId);
+    res.locals.familyId = await ensureFamily(
+      db,
+      res.locals.userId,
+      res.locals.account ? "app" : "legacy",
+    );
     next();
+  });
+  app.get("/auth/me", (_req, res) => {
+    if (!res.locals.account) return res.sendStatus(401);
+    res.json({ user: res.locals.account });
+  });
+  app.post("/auth/logout", async (req, res) => {
+    await revokeSession(
+      db,
+      req.headers.authorization?.replace(/^Bearer /, "") || "",
+    );
+    res.json({ ok: true });
   });
   app.get("/library", async (_req, res) =>
     res.json(await library(db, res.locals.familyId)),

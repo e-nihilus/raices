@@ -9,19 +9,31 @@ import { ActivityIndicator, Pressable, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { LibraryProvider, useLibrary } from "../state/LibraryProvider";
 import { colors, Copy, Icon } from "../components/ui";
+import { apiUrl } from "../lib/api";
+import Settings from "./settings";
 function Shell() {
-  const { error, setError } = useLibrary();
+  const { error, setError, loaded, user } = useLibrary();
+  if (!loaded)
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
   return (
     <View style={{ flex: 1 }}>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: colors.bg },
-        }}
-      >
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="recording" options={{ gestureEnabled: false }} />
-      </Stack>
+      {apiUrl && !user ? (
+        <Settings />
+      ) : (
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: colors.bg },
+          }}
+        >
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="recording" options={{ gestureEnabled: false }} />
+        </Stack>
+      )}
       {Boolean(error) && (
         <Pressable
           accessibilityRole="button"

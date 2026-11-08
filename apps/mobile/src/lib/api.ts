@@ -1,5 +1,4 @@
 import { sessionStorage } from "./session-storage";
-import { createClient } from "@supabase/supabase-js";
 import { Platform } from "react-native";
 import type { Conversation } from "@raices/shared";
 import { resolveAudio } from "./audio-files";
@@ -7,26 +6,98 @@ export const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "").replace(
   /\/$/,
   "",
 );
-export const supabase =
-  process.env.EXPO_PUBLIC_SUPABASE_URL &&
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
-    ? createClient(
-        process.env.EXPO_PUBLIC_SUPABASE_URL,
-        process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
-        {
-          auth: {
-            storage: sessionStorage,
-            autoRefreshToken: true,
-            persistSession: true,
-            detectSessionInUrl: false,
-          },
-        },
-      )
-    : null;
+export type Account = { id: string; username: string };
+const sessionKey = "raices-account-session-v1";
+let activeSession: { user: Account; token: string } | null = null;
+const authListeners = new Set<(user: Account | null) => void>();
+function publishAuth() {
+  for (const listener of authListeners) listener(activeSession?.user || null);
+}
+export function onAuthChange(listener: (user: Account | null) => void) {
+  authListeners.add(listener);
+  return () => authListeners.delete(listener);
+}
+export async function restoreAuth() {
+  if (!apiUrl) return null;
+  const saved = await sessionStorage.getItem(sessionKey);
+  if (!saved) return null;
+  const session = JSON.parse(saved) as { user: Account; token: string };
+  try {
+    const response = await fetch(`${apiUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    });
+    if (response.status === 401) {
+      await sessionStorage.removeItem(sessionKey);
+      return null;
+    }
+    if (!response.ok) throw new Error("No se pudo comprobar la sesión");
+    activeSession = {
+      user: (await response.json()).user,
+      token: session.token,
+    };
+    publishAuth();
+    return activeSession.user;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "No se pudo comprobar la sesión"
+    )
+      throw error;
+    throw new Error("No se pudo conectar para comprobar la sesión");
+  }
+}
+async function authRequest<T>(path: string, body: object): Promise<T> {
+  if (!apiUrl) throw new Error("Configura la dirección del servidor");
+  const response = await fetch(`${apiUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok)
+    throw new Error(result.error || "No se pudo acceder a la cuenta");
+  return result as T;
+}
+async function acceptSession(result: { user: Account; token: string }) {
+  await sessionStorage.setItem(sessionKey, JSON.stringify(result));
+  activeSession = result;
+  publishAuth();
+}
+export async function register(username: string, password: string) {
+  await acceptSession(
+    await authRequest("/auth/register", { username, password }),
+  );
+}
+export async function login(username: string, password: string) {
+  await acceptSession(await authRequest("/auth/login", { username, password }));
+}
+export async function logout() {
+  const token = activeSession?.token;
+  activeSession = null;
+  await sessionStorage.removeItem(sessionKey);
+  publishAuth();
+  if (token) {
+    try {
+      await fetch(`${apiUrl}/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+  }
+}
+export async function usernameAvailable(username: string) {
+  if (!apiUrl) throw new Error("Configura la dirección del servidor");
+  const response = await fetch(
+    `${apiUrl}/auth/username-available?username=${encodeURIComponent(username)}`,
+  );
+  const result = await response.json();
+  if (!response.ok)
+    throw new Error(result.error || "No se pudo comprobar el nombre");
+  return Boolean(result.available);
+}
 async function token() {
-  if (supabase)
-    return (await supabase.auth.getSession()).data.session?.access_token || "";
-  return process.env.EXPO_PUBLIC_DEV_API_TOKEN || "";
+  if (activeSession) return activeSession.token;
+  return "";
 }
 export async function request<T>(
   path: string,

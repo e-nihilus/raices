@@ -19,20 +19,30 @@ import {
 import * as DocumentPicker from "expo-document-picker";
 import { router } from "expo-router";
 import type { Conversation, Library } from "@raices/shared";
-import { apiUrl, request, supabase, uploadConversation } from "../lib/api";
+import {
+  apiUrl,
+  onAuthChange,
+  request,
+  restoreAuth,
+  uploadConversation,
+} from "../lib/api";
 import { persistAudio, removeAudio, shareJson } from "../lib/audio-files";
 import { demoLibrary } from "../lib/demo";
 const empty: Library = { conversations: [], people: [] };
 function useLibraryState() {
   const [data, setData] = useState<Library>(empty),
     [loaded, setLoaded] = useState(false),
-    [demo, setDemo] = useState(false),
+    [demo, setDemo] = useState(
+      process.env.EXPO_PUBLIC_DEMO_MODE === "true" ||
+        !process.env.EXPO_PUBLIC_API_URL,
+    ),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [networkBusy, setNetworkBusy] = useState(false),
     [recording, setRecording] = useState(false),
     [bookmarks, setBookmarks] = useState<number[]>([]),
     [user, setUser] = useState<string | null>(null),
+    [username, setUsername] = useState<string | null>(null),
     [aiConfigured, setAiConfigured] = useState(false);
   const current = useRef(data);
   const cacheKey = useRef("raices-library-local-v1");
@@ -113,25 +123,33 @@ function useLibraryState() {
       setLoaded(true);
       setUser(identity);
     }
-    void (async () => {
-      await load(
-        supabase
-          ? (await supabase.auth.getSession()).data.session?.user.id || null
-          : null,
-      );
-    })().catch(() => setError("No se pudo abrir la biblioteca local"));
-    const subscription = supabase?.auth.onAuthStateChange((_event, session) => {
-      void load(session?.user.id || null).catch(() =>
+    void restoreAuth()
+      .then((account) => {
+        if (!active) return;
+        setUsername(account?.username || null);
+        if (account) setDemo(false);
+        return load(account?.id || null);
+      })
+      .catch(() => {
+        setError(
+          "No se pudo comprobar la sesión. Revisa la conexión e inténtalo de nuevo.",
+        );
+        void load(null);
+      });
+    const unsubscribe = onAuthChange((account) => {
+      setUsername(account?.username || null);
+      if (account) setDemo(false);
+      void load(account?.id || null).catch(() =>
         setError("No se pudo abrir la biblioteca"),
       );
     });
     return () => {
       active = false;
-      subscription?.data.subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
   useEffect(() => {
-    if (!loaded || !apiUrl || (supabase && !user)) return;
+    if (!loaded || !apiUrl || !user) return;
     void refresh().catch((e) =>
       setError(e instanceof Error ? e.message : "No se pudo actualizar"),
     );
@@ -209,7 +227,7 @@ function useLibraryState() {
     if (Platform.OS !== "web" && uri !== audioUri)
       await removeAudio(uri).catch(() => {});
     router.replace({ pathname: "/saved", params: { id } });
-    if (apiUrl && (!supabase || user)) void run(() => send(c));
+    if (apiUrl && user) void run(() => send(c));
   };
   const start = async (mode: "listen" | "interview" = "listen") => {
     if (recording) {
@@ -347,6 +365,7 @@ function useLibraryState() {
     recording,
     recorderState,
     user,
+    username,
     aiConfigured,
     bookmarks,
     run,

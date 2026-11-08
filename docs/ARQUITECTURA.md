@@ -38,7 +38,7 @@ La escritura final es transaccional y una conversación lista no se inserta de n
 
 ## Acceso
 
-El modo local requiere un token aleatorio y escucha en localhost por defecto. Sólo es para desarrollo. En cloud, el servidor valida el JWT con Supabase Auth, verifica el espacio familiar y realiza las escrituras. Las políticas RLS permiten leer sólo a miembros. Las tablas de trabajos no son accesibles a clientes.
+El API registra cuentas con nombre único y contraseña protegida mediante scrypt y sal aleatoria. Emite sesiones con tokens aleatorios; sólo el hash del token se conserva en la base de datos. Cada cuenta tiene su propio espacio familiar y las consultas filtran por él. SQLite y PostgreSQL usan el mismo acceso por nombre. La API sigue aceptando sesiones antiguas de Supabase Auth para las cuentas ya existentes. Las tablas de usuarios, sesiones y trabajos no son accesibles a clientes mediante Supabase.
 
 El audio usa enlaces firmados de diez minutos; el enlace es una autorización temporal y debe tratarse como privado. Las credenciales de IA, PostgreSQL y servicio Supabase sólo están en el servidor. Los mensajes de error evitan volcar transcripciones o respuestas del proveedor en logs.
 

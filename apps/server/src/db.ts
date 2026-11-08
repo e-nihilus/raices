@@ -13,6 +13,13 @@ const databaseCaPath = resolve(
   process.cwd(),
   process.env.SUPABASE_CA_CERT_PATH || "supabase-ca.crt",
 );
+function databaseCa() {
+  if (process.env.SUPABASE_CA_CERT_BASE64)
+    return Buffer.from(process.env.SUPABASE_CA_CERT_BASE64, "base64").toString(
+      "utf8",
+    );
+  return readFileSync(databaseCaPath, "utf8");
+}
 mkdirSync(dataDir, { recursive: true });
 function postgres(client: Pool | PoolClient): Sql {
   return {
@@ -50,7 +57,7 @@ function postgres(client: Pool | PoolClient): Sql {
 export function createDatabase(file = resolve(dataDir, "raices.sqlite")): Sql {
   if (process.env.DATABASE_URL) {
     const verifyCertificate = process.env.DATABASE_SSL === "true";
-    const ca = verifyCertificate ? readFileSync(databaseCaPath, "utf8") : undefined;
+    const ca = verifyCertificate ? databaseCa() : undefined;
     return postgres(
       new Pool({
         connectionString: process.env.DATABASE_URL,

@@ -16,13 +16,19 @@ export const personFrom = (p: Row): Person => ({
   aliases: parse(p.aliases),
   candidateIds: parse(p.candidate_ids),
 });
-export async function ensureFamily(db: Sql, userId: string) {
+export async function ensureFamily(
+  db: Sql,
+  userId: string,
+  accountType: "legacy" | "app" = "legacy",
+) {
   return db.transaction(async (tx) => {
     // PostgreSQL advisory lock prevents parallel first requests creating duplicate spaces.
     if (process.env.DATABASE_URL)
       await tx.all("SELECT pg_advisory_xact_lock(hashtext(?))", [userId]);
+    const membership =
+      accountType === "app" ? "app_family_members" : "family_members";
     const rows = await tx.all(
-      "SELECT f.* FROM families f JOIN family_members m ON m.family_id=f.id WHERE m.user_id=? ORDER BY f.created_at LIMIT 1",
+      `SELECT f.* FROM families f JOIN ${membership} m ON m.family_id=f.id WHERE m.user_id=? ORDER BY f.created_at LIMIT 1`,
       [userId],
     );
     if (rows[0]) return rows[0].id as string;
@@ -32,7 +38,7 @@ export async function ensureFamily(db: Sql, userId: string) {
       "Mi familia",
       new Date().toISOString(),
     ]);
-    await tx.all("INSERT INTO family_members(family_id,user_id) VALUES(?,?)", [
+    await tx.all(`INSERT INTO ${membership}(family_id,user_id) VALUES(?,?)`, [
       id,
       userId,
     ]);

@@ -132,11 +132,13 @@ export function Screen({
   back = false,
   title,
   scroll = true,
+  wide = false,
 }: {
   children: React.ReactNode;
   back?: boolean;
   title?: string;
   scroll?: boolean;
+  wide?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const library = useLibrary();
@@ -144,7 +146,7 @@ export function Screen({
     <View
       style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top }}
     >
-      <View style={styles.header}>
+      <View style={[styles.header, wide && { maxWidth: 1280 }]}>
         <View style={styles.row}>
           {back ? (
             <Pressable
@@ -197,6 +199,7 @@ export function Screen({
         <ScrollView
           contentContainerStyle={[
             styles.content,
+            wide && { maxWidth: 1280 },
             { paddingBottom: 32 + insets.bottom },
           ]}
           keyboardShouldPersistTaps="handled"
@@ -204,7 +207,9 @@ export function Screen({
           {children}
         </ScrollView>
       ) : (
-        <View style={[styles.content, { flex: 1 }]}>{children}</View>
+        <View style={[styles.content, wide && { maxWidth: 1280 }, { flex: 1 }]}>
+          {children}
+        </View>
       )}
     </View>
   );

@@ -23,9 +23,9 @@ Los proveedores de IA están sustituidos por fixtures controlados. Estas pruebas
 
 ## Supabase
 
-Usar dos cuentas con familias distintas. Intentar acceder al UUID de una conversación ajena debe devolver 404; leer sus filas o sus archivos directamente tampoco debe funcionar. Probar registro, confirmación de correo, cierre/inicio de sesión y renovación de sesión.
+Usar dos cuentas con familias distintas. Intentar acceder al UUID de una conversación ajena debe devolver 404; leer sus filas o sus archivos directamente tampoco debe funcionar. Probar registro, nombre duplicado con distintas mayúsculas, contraseña incorrecta, cierre/inicio de sesión y caducidad de sesión.
 
-Comprobar que el bucket no es público y que las claves privadas no aparecen en el bundle de la app. Probar que `NODE_ENV=production` no acepta el token local.
+Comprobar que el bucket no es público y que las claves privadas no aparecen en el bundle de la app. Probar que ningún token de desarrollo compartido da acceso a datos.
 
 ## Resultado de esta entrega — 11 de octubre de 2026
 
