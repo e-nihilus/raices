@@ -272,11 +272,11 @@ export default function Home() {
           </View>
         </View>
       </Card>
-      <Card style={{ backgroundColor: "#faf1e8", borderWidth: 0 }}>
+      <Card style={{ backgroundColor: "#e8f2ea", borderWidth: 0 }}>
         <View style={[styles.row, { alignItems: "flex-start" }]}>
-          <Icon name="sun" color={colors.terra} />
+          <Icon name="sun" color={colors.primary} />
           <View style={{ flex: 1, gap: 6 }}>
-            <Copy kind="small" style={{ color: colors.terra }}>
+            <Copy kind="small" style={{ color: colors.primary }}>
               PREGUNTA DE HOY
             </Copy>
             <Copy style={{ fontFamily: "NewsreaderItalic", fontSize: 21 }}>
