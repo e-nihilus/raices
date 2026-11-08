@@ -228,6 +228,27 @@ test("los fallos conservan el audio y reprograman el trabajo", async () => {
     assert.equal(job.status, "queued");
     assert.equal(job.attempts, 1);
     assert.equal((await library(db, family)).conversations[0].status, "queued");
+    assert.match(job.error, /transcribir/);
+  } finally {
+    await db.close();
+  }
+});
+
+test("el diagnóstico indica la etapa y el código sin guardar detalles privados", async () => {
+  const db = createDatabase(":memory:");
+  try {
+    const family = await ensureFamily(db, "user");
+    await conversation(db, family);
+    await processNext(db, {
+      readAudio: async () => Buffer.from("fixture"),
+      transcribe: async () => {
+        throw new Error("ElevenLabs rechazó la transcripción (401)");
+      },
+      extract: async () => extraction,
+    });
+    const [job] = await db.all("SELECT * FROM processing_jobs");
+    assert.match(job.error, /ElevenLabs: 401/);
+    assert.doesNotMatch(job.error, /fixture/);
   } finally {
     await db.close();
   }

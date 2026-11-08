@@ -37,11 +37,6 @@ export default function Home() {
         <Copy kind="title" style={{ textAlign: "center", maxWidth: 340 }}>
           Cada conversación{"\n"}guarda una historia
         </Copy>
-        <Copy
-          style={{ textAlign: "center", color: colors.muted, maxWidth: 300 }}
-        >
-          Escucha, conversa y guarda sus recuerdos con calma y cariño.
-        </Copy>
       </View>
       <View
         style={{
@@ -195,9 +190,9 @@ export default function Home() {
                 accessibilityLabel="Empezar a grabar"
                 onPress={() => void lib.run(() => lib.start(mode))}
                 style={({ pressed }) => ({
-                  width: 160,
-                  height: 160,
-                  borderRadius: 85,
+                  width: 184,
+                  height: 184,
+                  borderRadius: 92,
                   backgroundColor: colors.sage,
                   alignItems: "center",
                   justifyContent: "center",
@@ -209,9 +204,9 @@ export default function Home() {
               >
                 <View
                   style={{
-                    width: 146,
-                    height: 146,
-                    borderRadius: 80,
+                    width: 170,
+                    height: 170,
+                    borderRadius: 85,
                     borderWidth: 2,
                     borderColor: "#87a18f",
                     alignItems: "center",

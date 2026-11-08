@@ -19,6 +19,7 @@ export async function processNext(
     [lease, now, now, now, now],
   );
   if (!job) return false;
+  let stage: "audio" | "transcription" | "extraction" | "save" = "audio";
   try {
     const [conversation] = await db.all(
       "SELECT * FROM conversations WHERE id=?",
@@ -38,10 +39,13 @@ export async function processNext(
         .catch(() => {});
     }, 60_000);
     try {
+      const audio = await providers.readAudio(conversation.audio_path);
+      stage = "transcription";
       const segments = await providers.transcribe(
-        await providers.readAudio(conversation.audio_path),
+        audio,
         conversation.mime_type,
       );
+      stage = "extraction";
       await db.all("UPDATE conversations SET status='extracting' WHERE id=?", [
         conversation.id,
       ]);
@@ -51,19 +55,43 @@ export async function processNext(
         ])
       ).map(personFrom);
       const extraction = await providers.extract(segments, people);
+      stage = "save";
       await saveExtraction(db, conversation.id, segments, extraction);
     } finally {
       clearInterval(heartbeat);
     }
   } catch (error) {
     // Provider details may include private data, so persist only a short, safe diagnostic.
+    const providerStatus =
+      error instanceof Error
+        ? /^ElevenLabs rechazó la transcripción \((\d{3})\)$/.exec(
+            error.message,
+          )?.[1]
+        : undefined;
+    const status = Number(
+      providerStatus ??
+        (typeof error === "object" && error !== null && "status" in error
+          ? error.status
+          : 0),
+    );
+    const safeStatus =
+      Number.isInteger(status) && status >= 400 && status <= 599
+        ? status
+        : undefined;
+    console.error("Error al procesar audio", { stage, status: safeStatus });
     const message =
       error instanceof Error &&
       /No se detectó|extracción válida|cita literal|evidencia válida/.test(
         error.message,
       )
         ? error.message
-        : "No se pudo procesar el audio. Revisa las credenciales, conexión y FFmpeg del servidor.";
+        : stage === "audio"
+          ? "No se pudo acceder al audio guardado. Revisa el almacenamiento del servidor."
+          : stage === "transcription"
+            ? `No se pudo transcribir el audio${safeStatus ? ` (ElevenLabs: ${safeStatus})` : ""}. Revisa la conexión y la configuración de transcripción.`
+            : stage === "extraction"
+              ? `No se pudo generar el resumen${safeStatus ? ` (OpenAI: ${safeStatus})` : ""}. Revisa la conexión y la configuración de OpenAI.`
+              : "No se pudo guardar el resultado del procesamiento.";
     const retry = job.attempts < 3;
     await db.all(
       "UPDATE processing_jobs SET status=?,error=?,lease_until=NULL,available_at=? WHERE id=?",
