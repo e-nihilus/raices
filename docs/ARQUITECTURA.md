@@ -14,6 +14,8 @@
 10. Una transacción guarda segmentos, afirmaciones, personas, relaciones, eventos y sus vínculos. Marca el trabajo como finalizado.
 11. La app consulta estados mientras haya trabajos pendientes y presenta fuentes y controles de revisión.
 
+En modo entrevista, la app graba respuestas por turnos. El backend transcribe cada turno con Scribe, usa OpenAI para redactar una pregunta contextual y ElevenLabs Text to Speech para pronunciarla. La app pasa al siguiente turno tras una pausa detectada por el nivel del micrófono o al tocar el botón. Al terminar, FFmpeg reúne las respuestas en un MP3 y crea una conversación con un UUID estable; el mismo worker la procesa. Los archivos de respuesta permanecen en el dispositivo hasta que el guardado final termina. La pregunta sintetizada no se incluye en el audio almacenado.
+
 ## Datos
 
 Una afirmación guarda `conversation_id`, `segment_id`, cita, interpretación, persona opcional y certeza. Un acontecimiento puede apoyarse en varias afirmaciones, enlazadas mediante `event_claims`. Una persona puede intervenir en varios eventos mediante `event_people`.
@@ -45,7 +47,8 @@ El audio usa enlaces firmados de diez minutos; el enlace es una autorización te
 ## Referencias de implementación
 
 - Audio Expo SDK 57: https://docs.expo.dev/versions/v57.0.0/sdk/audio/
-- Transcripción: https://developers.openai.com/api/docs/guides/speech-to-text
+- Transcripción Scribe v2: https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+- Voz ElevenLabs: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
 - JSON estructurado: https://developers.openai.com/api/docs/guides/structured-outputs
 - RLS: https://supabase.com/docs/guides/database/postgres/row-level-security
 - Storage privado: https://supabase.com/docs/guides/storage/security/access-control

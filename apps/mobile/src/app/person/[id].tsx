@@ -426,7 +426,9 @@ export default function Person() {
             <Badge>{e.year || "Fecha por conocer"}</Badge>
             <Copy kind="heading">{e.description}</Copy>
             {e.place && <Copy kind="small">{e.place}</Copy>}
-            <Badge warm>{certaintyLabels[e.certainty]}</Badge>
+            <Badge warm={e.certainty !== "confirmed"}>
+              {certaintyLabels[e.certainty]}
+            </Badge>
             <Button
               secondary
               label="Ver fuente y escuchar"

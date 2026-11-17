@@ -5,6 +5,7 @@
 - Monorepo, React Native/Expo, backend Node y esquema compartido.
 - Adaptación de cuatro pantallas Stitch y pantallas complementarias.
 - Grabación, guardado, importación, reproductor, búsqueda y edición de título.
+- Entrevista guiada por IA con preguntas contextuales, voz de ElevenLabs y guardado conjunto de respuestas.
 - Biblioteca, fichas, cronología, fuentes y revisión de afirmaciones.
 - Persistencia local, API autenticado, cola con reintentos y adaptadores IA.
 - Esquema Supabase con RLS y bucket privado.
@@ -44,5 +45,4 @@
 - Árbol genealógico visual y fotos propias.
 - Chat familiar con citas, historias, archivos y mapas.
 - Subidas en segundo plano y avisos push.
-- Entrevistador IA cuando el flujo de conservación esté validado.
 - Evaluación de privacidad, consentimiento, retención y obligaciones jurídicas para Europa.

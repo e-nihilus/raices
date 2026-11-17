@@ -41,7 +41,7 @@ export default function ConversationMode() {
           <View style={{ gap: 6 }}>
             <Copy kind="heading">Modo Entrevistar</Copy>
             <Copy kind="small" style={{ color: colors.primary }}>GUIADO CON IA CARIÑOSA</Copy>
-            <Copy>Cuando haya un silencio o una historia incompleta, Raíces propone preguntas basadas en lo que se va contando.</Copy>
+          <Copy>Raíces hace una pregunta en voz alta, graba vuestra respuesta y propone la siguiente según lo que habéis contado.</Copy>
           </View>
           <Card style={{ padding: 14, backgroundColor: "#f5f1eb", borderWidth: 0 }}>
             <Copy style={{ fontFamily: "NewsreaderItalic" }}>“¿Cómo era la casa de tu madre en Jaén?”</Copy>
@@ -55,7 +55,7 @@ export default function ConversationMode() {
         onPress={() => void lib.run(() => lib.start(mode))}
       />
       <Copy kind="small" style={{ textAlign: "center" }}>
-        Tus recuerdos se tratan de forma privada. La entrevista conversacional se activará al configurar el proveedor de voz.
+        La entrevista necesita conexión. Las respuestas se envían a ElevenLabs para transcribirlas y a OpenAI para preparar preguntas; se guardan como recuerdo al terminar.
       </Copy>
     </Screen>
   );

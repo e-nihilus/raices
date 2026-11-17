@@ -9,12 +9,14 @@ import { rateLimit } from "express-rate-limit";
 import multer from "multer";
 import { z } from "zod";
 import { randomUUID, timingSafeEqual, createHmac } from "node:crypto";
-import { certaintySchema } from "@raices/shared";
+import { certaintySchema, singleWordCorrection } from "@raices/shared";
+import { correctFamilyWord } from "./family-correction.ts";
 import { type Sql } from "./db.ts";
 import { sharedTree } from "./shared-tree.ts";
 import { ensureFamily, library, mergePeople, json } from "./store.ts";
 import { cloud, saveAudio, deleteAudio, readAudio } from "./audio.ts";
 import { aiConfigured, reviewClaim, searchSources, transcribe } from "./ai.ts";
+import { combineInterviewAudio, interviewConfigured, nextInterviewQuestion, speakInterviewQuestion } from "./interview.ts";
 import {
   deleteDocumentFile,
   readDocumentFile,
@@ -49,6 +51,18 @@ const documentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 3 },
 });
+const interviewTurnUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, files: 1, fields: 2 },
+});
+const interviewFinishUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, files: 20, fields: 4 },
+});
+const interviewHistory = z.array(z.object({
+  question: z.string().max(240),
+  answer: z.string().max(2000),
+})).max(20);
 const safeEquals = (a: string, b: string) =>
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -67,10 +81,26 @@ export function createApp(db: Sql) {
     createHmac("sha256", signingSecret)
       .update(`${id}:${expires}`)
       .digest("hex");
+  const spokenQuestions = new Map<string, { audio: Buffer; expires: number }>();
+  app.get("/interview/speech/:id", (req, res) => {
+    const id = req.params.id as string;
+    const expires = String(req.query.expires || "");
+    const sig = String(req.query.sig || "");
+    const entry = spokenQuestions.get(id);
+    if (
+      !entry || !/^\d+$/.test(expires) ||
+      entry.expires !== Number(expires) || Date.now() > entry.expires ||
+      !safeEquals(sig, signature(`interview:${id}`, expires))
+    )
+      return res.sendStatus(403);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.type("audio/mpeg").send(entry.audio);
+  });
   app.get("/health", (_req, res) =>
     res.json({
       ok: true,
       aiConfigured: aiConfigured(),
+      interviewConfigured: interviewConfigured(),
       storage: cloud ? "supabase" : "local",
     }),
   );
@@ -393,6 +423,92 @@ export function createApp(db: Sql) {
   });
   app.get("/library", async (_req, res) =>
     res.json(await library(db, res.locals.familyId)),
+  );
+  const spokenQuestion = async (history: z.infer<typeof interviewHistory>) => {
+    if (!interviewConfigured()) throw new Error("La entrevista con voz no está configurada");
+    const question = await nextInterviewQuestion(history);
+    const audio = await speakInterviewQuestion(question);
+    for (const [key, value] of spokenQuestions)
+      if (value.expires < Date.now()) spokenQuestions.delete(key);
+    while (spokenQuestions.size >= 100)
+      spokenQuestions.delete(spokenQuestions.keys().next().value!);
+    const id = randomUUID();
+    const expires = Date.now() + 10 * 60_000;
+    spokenQuestions.set(id, { audio, expires });
+    return {
+      question,
+      speechUrl: `/interview/speech/${id}?expires=${expires}&sig=${signature(`interview:${id}`, String(expires))}`,
+    };
+  };
+  app.post(
+    "/interview/question",
+    rateLimit({ windowMs: 60_000, limit: 20 }),
+    async (req, res) => {
+      if (!interviewConfigured())
+        return res.status(503).json({ error: "Configura OpenAI y ElevenLabs en el servidor" });
+      const { history } = z.object({ history: interviewHistory }).parse(req.body);
+      res.json(await spokenQuestion(history));
+    },
+  );
+  app.post(
+    "/interview/turn",
+    rateLimit({ windowMs: 60_000, limit: 20 }),
+    interviewTurnUpload.single("audio"),
+    async (req, res) => {
+      if (!interviewConfigured())
+        return res.status(503).json({ error: "La entrevista con voz no está configurada" });
+      if (!req.file)
+        return res.status(400).json({ error: "Falta la respuesta grabada" });
+      const mime = req.file.mimetype.split(";")[0];
+      if (!["audio/webm", "audio/mp4", "audio/m4a"].includes(mime))
+        return res.status(400).json({ error: "Formato de audio no compatible" });
+      const history = interviewHistory.parse(JSON.parse(req.body.history || "[]"));
+      const question = z.string().trim().min(8).max(240).parse(req.body.question);
+      const segments = await transcribe(req.file.buffer, mime);
+      const answer = segments.map((segment) => segment.text).join(" ").slice(0, 2000);
+      const next = await spokenQuestion([...history, { question, answer }].slice(-20));
+      res.json({ answer, ...next });
+    },
+  );
+  app.post(
+    "/interview/finish",
+    rateLimit({ windowMs: 60_000, limit: 10 }),
+    interviewFinishUpload.array("audio", 20),
+    async (req, res) => {
+      const files = req.files as Express.Multer.File[] | undefined;
+      if (!files?.length)
+        return res.status(400).json({ error: "Faltan las respuestas grabadas" });
+      if (files.some((file) => !["audio/webm", "audio/mp4", "audio/m4a"].includes(file.mimetype.split(";")[0])))
+        return res.status(400).json({ error: "Formato de audio no compatible" });
+      const id = uuid.parse(req.body.id);
+      const family = res.locals.familyId;
+      const [existing] = await db.all("SELECT * FROM conversations WHERE id=?", [id]);
+      if (existing) {
+        if (existing.family_id !== family) return res.sendStatus(404);
+        return res.json({ id, status: existing.status });
+      }
+      const duration = z.coerce.number().min(0).max(14400).parse(req.body.duration);
+      const bookmarks = z.array(z.number().nonnegative()).max(100).parse(JSON.parse(req.body.bookmarks || "[]"));
+      const audio = await combineInterviewAudio(files.map((file) => ({ buffer: file.buffer, mime: file.mimetype.split(";")[0] })));
+      const path = `${family}/${id}`;
+      await saveAudio(path, audio, "audio/mpeg");
+      try {
+        await db.transaction(async (tx) => {
+          await tx.all(
+            "INSERT INTO conversations(id,family_id,title,created_at,duration,status,audio_path,mime_type,bookmarks) VALUES(?,?,?,?,?,?,?,?,?)",
+            [id, family, "Una entrevista familiar", new Date().toISOString(), duration, "queued", path, "audio/mpeg", json(bookmarks)],
+          );
+          await tx.all(
+            "INSERT INTO processing_jobs(id,conversation_id,available_at) VALUES(?,?,?)",
+            [randomUUID(), id, new Date().toISOString()],
+          );
+        });
+      } catch (error) {
+        await deleteAudio(path);
+        throw error;
+      }
+      res.status(201).json({ id, status: "queued" });
+    },
   );
   app.post(
     "/documents",
@@ -921,23 +1037,133 @@ export function createApp(db: Sql) {
       .object({
         certainty: certaintySchema.optional(),
         statement: z.string().trim().min(1).max(2000).optional(),
+        quote: z.string().trim().min(1).max(2000).optional(),
+        originalQuote: z.string().min(1).max(2000).optional(),
+        originalStatement: z.string().min(1).max(2000).optional(),
+        replaceThroughout: z
+          .object({
+            from: z.string().min(1).max(200),
+            to: z.string().min(1).max(200),
+          })
+          .optional(),
       })
       .refine(
         (value) =>
-          value.certainty !== undefined || value.statement !== undefined,
+          value.certainty !== undefined ||
+          value.statement !== undefined ||
+          value.quote !== undefined,
       )
       .parse(req.body);
-    const [claim] = await db.all(
-      "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
-      [req.params.id, res.locals.familyId],
-    );
-    if (!claim) return res.sendStatus(404);
-    await db.all("UPDATE claims SET certainty=?, statement=? WHERE id=?", [
-      input.certainty ??
-        (input.statement !== undefined ? "pending" : claim.certainty),
-      input.statement ?? claim.statement,
-      claim.id,
-    ]);
+    const result = await db.transaction(async (tx) => {
+      const [claim] = await tx.all(
+        "SELECT cl.* FROM claims cl JOIN conversations c ON c.id=cl.conversation_id WHERE cl.id=? AND c.family_id=?",
+        [req.params.id, res.locals.familyId],
+      );
+      if (!claim) return "missing";
+      if (
+        (input.originalQuote !== undefined &&
+          claim.quote !== input.originalQuote) ||
+        (input.originalStatement !== undefined &&
+          claim.statement !== input.originalStatement)
+      )
+        return "changed";
+      if (input.replaceThroughout) {
+        const candidate =
+          input.quote !== undefined
+            ? singleWordCorrection(claim.quote, input.quote)
+            : null;
+        const statementCandidate =
+          input.statement !== undefined
+            ? singleWordCorrection(claim.statement, input.statement)
+            : null;
+        if (
+          ![candidate, statementCandidate].some(
+            (change) =>
+              change?.from === input.replaceThroughout!.from &&
+              change.to === input.replaceThroughout!.to,
+          )
+        )
+          return "invalidReplacement";
+      }
+      const quoteChanged =
+        input.quote !== undefined && input.quote !== claim.quote;
+      const statementChanged =
+        input.statement !== undefined && input.statement !== claim.statement;
+      if (quoteChanged) {
+        const [segment] = await tx.all(
+          "SELECT text FROM segments WHERE id=? AND conversation_id=?",
+          [claim.segment_id, claim.conversation_id],
+        );
+        if (!segment) return "missing";
+        const start = segment.text.indexOf(claim.quote);
+        if (start < 0 || segment.text.indexOf(claim.quote, start + 1) !== -1)
+          return "ambiguous";
+        const updatedText =
+          segment.text.slice(0, start) +
+          input.quote +
+          segment.text.slice(start + claim.quote.length);
+        const related = await tx.all(
+          "SELECT id,quote FROM claims WHERE segment_id=? AND id<>?",
+          [claim.segment_id, claim.id],
+        );
+        // Keep every other quotation grounded in its segment; identical citations
+        // refer to the same passage and are updated together.
+        if (
+          related.some(
+            (other) =>
+              other.quote !== claim.quote && !updatedText.includes(other.quote),
+          )
+        )
+          return "overlap";
+        await tx.all("UPDATE segments SET text=? WHERE id=?", [
+          updatedText,
+          claim.segment_id,
+        ]);
+        await tx.all(
+          "UPDATE claims SET quote=?,certainty='pending' WHERE segment_id=? AND quote=?",
+          [input.quote, claim.segment_id, claim.quote],
+        );
+      }
+      await tx.all(
+        "UPDATE claims SET certainty=?,statement=?,quote=? WHERE id=?",
+        [
+          input.certainty ??
+            (quoteChanged || statementChanged ? "pending" : claim.certainty),
+          input.statement ?? claim.statement,
+          input.quote ?? claim.quote,
+          claim.id,
+        ],
+      );
+      if (input.replaceThroughout)
+        await correctFamilyWord(
+          tx,
+          res.locals.familyId,
+          input.replaceThroughout.from,
+          input.replaceThroughout.to,
+        );
+      return "ok";
+    });
+    if (result === "missing") return res.sendStatus(404);
+    if (result === "changed")
+      return res.status(409).json({
+        error: "El texto ha cambiado. Actualiza la página antes de guardarlo.",
+      });
+    if (result === "invalidReplacement")
+      return res
+        .status(400)
+        .json({
+          error: "La corrección no coincide con los cambios realizados.",
+        });
+    if (result === "ambiguous")
+      return res.status(409).json({
+        error:
+          "No se puede identificar la cita de forma única en la transcripción.",
+      });
+    if (result === "overlap")
+      return res.status(409).json({
+        error:
+          "Esta cita se solapa con otra cita. Corrige primero la transcripción desde el recuerdo.",
+      });
     res.json({ ok: true });
   });
   app.post("/people/:id/merge", async (req, res) => {
@@ -968,6 +1194,8 @@ export function createApp(db: Sql) {
           error:
             "Archivo demasiado grande o demasiados archivos (documentos: 20 MB; audio: 100 MB)",
         });
+      if (error instanceof Error && /^ElevenLabs rechazó la voz \(\d{3}\)$/.test(error.message))
+        return res.status(502).json({ error: `${error.message}. Comprueba el permiso Text to Speech, la voz y los créditos.` });
       console.error("Error interno del API (detalles privados omitidos).");
       res.status(500).json({ error: "No se pudo completar la operación" });
     },

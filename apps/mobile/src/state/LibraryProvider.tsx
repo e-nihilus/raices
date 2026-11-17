@@ -17,7 +17,7 @@ import {
   useAudioRecorderState,
 } from "expo-audio";
 import * as DocumentPicker from "expo-document-picker";
-import { router } from "expo-router";
+import { router, type Href } from "expo-router";
 import type { Conversation, Library } from "@raices/shared";
 import {
   apiUrl,
@@ -233,6 +233,14 @@ function useLibraryState() {
     if (apiUrl && user) void run(() => send(c));
   };
   const start = async (mode: "listen" | "interview" = "listen") => {
+    if (mode === "interview") {
+      if (recording) throw new Error("Termina primero la grabación en curso");
+      const health = await request<{ interviewConfigured: boolean }>("/health");
+      if (!health.interviewConfigured) throw new Error("Configura OpenAI y ElevenLabs en el servidor para usar la entrevista");
+      // Expo refreshes generated route types when the development server starts.
+      router.push("/interview" as Href);
+      return;
+    }
     if (recording) {
       router.push({ pathname: "/recording", params: { mode } });
       return;

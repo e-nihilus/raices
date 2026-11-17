@@ -113,7 +113,7 @@ export default function Home() {
                     value: "interview",
                     label: "Entrevista",
                     icon: "star",
-                    detail: "Preguntas sugeridas",
+                    detail: "Preguntas en voz alta",
                   },
                 ] as const
               ).map((option) => (

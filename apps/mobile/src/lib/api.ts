@@ -103,6 +103,7 @@ async function token() {
 export async function request<T>(
   path: string,
   init: RequestInit = {},
+  timeoutMs = 120_000,
 ): Promise<T> {
   if (!apiUrl)
     throw new Error("Configura la dirección del backend para conectar la IA");
@@ -111,7 +112,7 @@ export async function request<T>(
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${apiUrl}${path}`, {
       ...init,

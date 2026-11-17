@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Person, Relationship } from "@raices/shared";
 import { demoFamilyParents, demoFamilyPartners } from "../lib/demo";
+import { familyGraph, type FamilyGraph } from "./family-graph";
 import { Badge, Copy, Icon, colors, styles } from "./ui";
 
 const MAP_WIDTH = 2240;
@@ -86,52 +87,6 @@ function bounded(
       ? (size.height - height) / 2
       : clamp(view.y, size.height - height - 60, 60);
   return { x, y, scale };
-}
-
-type FamilyGraph = {
-  parentsByChild: Map<string, Set<string>>;
-  partners: [string, string][];
-};
-
-function familyGraph(
-  people: Person[],
-  relationships: Relationship[],
-): FamilyGraph {
-  const ids = new Set(people.map((person) => person.id));
-  const parentsByChild = new Map<string, Set<string>>();
-  const partners = new Map<string, [string, string]>();
-  for (const relation of relationships) {
-    if (
-      !ids.has(relation.fromId) ||
-      !ids.has(relation.toId) ||
-      relation.fromId === relation.toId
-    )
-      continue;
-    const kind = relation.type
-      .trim()
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/^(es |su )/, "");
-    let parent: string | undefined;
-    let child: string | undefined;
-    if (/^(padre|madre|progenitor(?:a)?)(?:\b|$)/.test(kind)) {
-      [parent, child] = [relation.fromId, relation.toId];
-    } else if (/^(hijo|hija)(?:\b|$)/.test(kind)) {
-      [parent, child] = [relation.toId, relation.fromId];
-    } else if (
-      /^(pareja|conyuge|espos[oa]|marido|mujer|casad[oa])(?:\b|$)/.test(kind)
-    ) {
-      const pair = [relation.fromId, relation.toId].sort() as [string, string];
-      partners.set(pair.join("|"), pair);
-    }
-    if (parent && child) {
-      const parents = parentsByChild.get(child) || new Set<string>();
-      parents.add(parent);
-      parentsByChild.set(child, parents);
-    }
-  }
-  return { parentsByChild, partners: [...partners.values()] };
 }
 
 function realMapLayout(people: Person[], graph: FamilyGraph) {
@@ -721,6 +676,12 @@ function FamilyTreeCanvas({
           </Copy>
         </View>
       </View>
+      {!demo && graph.inferredSiblingParents && (
+        <Copy kind="small">
+          La rama de hermanos incluye parentescos deducidos; comprueba que
+          comparten ambos progenitores.
+        </Copy>
+      )}
       <Copy kind="small" style={{ textAlign: "center" }}>
         Pellizca con dos dedos o usa la rueda para ampliar. Toca una persona
         para abrir su ficha.

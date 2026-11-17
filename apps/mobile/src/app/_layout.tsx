@@ -32,6 +32,7 @@ function Shell() {
         >
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="recording" options={{ gestureEnabled: false }} />
+          <Stack.Screen name="interview" options={{ gestureEnabled: false }} />
         </Stack>
       )}
       {Boolean(error) && (

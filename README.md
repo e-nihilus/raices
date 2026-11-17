@@ -62,6 +62,8 @@ SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 SUPABASE_CA_CERT_BASE64=contenido-base64-del-certificado-de-supabase
 OPENAI_API_KEY=tu-clave-privada
 ELEVENLABS_API_KEY=tu-clave-privada-de-elevenlabs
+ELEVENLABS_VOICE_ID=identificador-opcional-de-tu-voz
+INTERVIEW_MODEL=gpt-4.1-mini
 EXTRACTION_MODEL=gpt-4.1-mini
 DOCUMENT_MODEL=gpt-4.1-mini
 ALLOWED_ORIGINS=https://tu-proyecto.vercel.app
@@ -86,7 +88,7 @@ EXPO_PUBLIC_API_URL=https://tu-api.up.railway.app
 
 Las variables `EXPO_PUBLIC_*` se integran en el JavaScript de la web; sólo deben contener la URL pública del API. `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y las claves de IA permanecen exclusivamente en Railway. `TRANSCRIPTION_MODEL=whisper-1` ya no se utiliza; el servidor envía el audio a Scribe v2 cuando `ELEVENLABS_API_KEY` está configurada.
 
-La clave de ElevenLabs debe tener permiso **Speech to Text: Access**. Si la creaste en **Shared Variables** de Railway, vincula `ELEVENLABS_API_KEY` al servicio `@raices/server` y aplica el despliegue.
+La clave de ElevenLabs debe tener permisos **Speech to Text: Access** y **Text to Speech: Access** para usar ambos modos. Si la creaste en **Shared Variables** de Railway, vincula `ELEVENLABS_API_KEY` al servicio `@raices/server` y aplica el despliegue. `ELEVENLABS_VOICE_ID` es opcional; por defecto se usa la voz Talia de ElevenLabs.
 
 Para conectar un teléfono físico al backend local:
 
@@ -118,6 +120,8 @@ En `apps/server/.env`:
 ```dotenv
 OPENAI_API_KEY=tu_clave_privada
 ELEVENLABS_API_KEY=tu_clave_privada_de_elevenlabs
+ELEVENLABS_VOICE_ID=identificador_opcional_de_tu_voz
+INTERVIEW_MODEL=gpt-4.1-mini
 EXTRACTION_MODEL=gpt-4.1-mini
 DOCUMENT_MODEL=gpt-4.1-mini
 ```
@@ -125,6 +129,8 @@ DOCUMENT_MODEL=gpt-4.1-mini
 Reinicia `npm run server`. El worker empezará a consumir los audios pendientes. Las llamadas al proveedor tendrán el coste de tu cuenta. No se han realizado llamadas reales ni se han usado credenciales externas durante el desarrollo.
 
 Scribe v2 transcribe el audio con marcas de tiempo y diarización. La interfaz muestra **Hablante 1**, **Hablante 2**, etc. para distinguir las voces dentro de cada grabación; esas etiquetas no identifican por sí solas a las personas por nombre. OpenAI extrae después los datos y relaciones, validados con Zod. Los formatos compatibles se envían directamente a ElevenLabs; FFmpeg convierte a MP3 los formatos que no admita el adaptador.
+
+El modo **Entrevista** requiere conexión y ambas claves configuradas en el backend. Raíces formula una pregunta, ElevenLabs la pronuncia y la app graba la respuesta. Tras unos tres segundos de silencio, o al pulsar **Terminar respuesta**, Scribe transcribe ese turno y OpenAI prepara la siguiente pregunta a partir del historial. Al terminar, FFmpeg reúne sólo las respuestas en un MP3 y lo guarda como un recuerdo que pasa por el procesamiento habitual. La voz sintetizada no se mezcla con el recuerdo. La pregunta puede escucharse de nuevo desde la pantalla; si falla la red después de grabar, se puede reintentar sin repetir la respuesta.
 
 Los documentos admiten PDF, JPG, PNG y WebP. OpenAI lee su texto y extrae datos genealógicos con citas literales. Los nombres completos iguales se enlazan cuando hay una única coincidencia; los apellidos compartidos sugieren posibles identidades para revisión, sin fusionarlas automáticamente. Los parentescos extraídos quedan **por confirmar** y conservan el documento original como fuente. Los archivos sin texto legible se guardan, pero no generan parentescos.
 

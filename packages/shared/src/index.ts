@@ -215,3 +215,17 @@ export const certaintyLabels: Record<Certainty, string> = {
   confirmed: "Confirmado por ti",
   contradictory: "Versiones diferentes",
 };
+
+/** Detect one changed whole word for an explicitly reviewed library correction. */
+export function singleWordCorrection(before: string, after: string) {
+  const words = (text: string) => text.match(/[\p{L}\p{M}\p{N}]+/gu) || [];
+  const oldWords = words(before),
+    newWords = words(after);
+  if (oldWords.length !== newWords.length) return null;
+  const differences = oldWords
+    .map((word, i) => (word === newWords[i] ? -1 : i))
+    .filter((i) => i >= 0);
+  if (differences.length !== 1) return null;
+  const index = differences[0];
+  return { from: oldWords[index], to: newWords[index] };
+}
